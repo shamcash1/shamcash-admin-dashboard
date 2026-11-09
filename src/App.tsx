@@ -12,11 +12,12 @@ import {
   PauseCircle,
   Power,
   Database,
-  ExternalLink,
   CalendarPlus,
   AlertTriangle,
   RotateCcw,
   Lock,
+  ShieldCheck,
+  Share2,
 } from 'lucide-react';
 import {
   supabase,
@@ -25,6 +26,9 @@ import {
   getClientPacUrl,
   getClientStatusInfo,
   addDaysToDateString,
+  fetchHappEncryptedLink,
+  HAPP_IOS_URL,
+  HAPP_ANDROID_APK_URL,
 } from './lib/supabase';
 import { ClientModal } from './components/ClientModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
@@ -63,6 +67,10 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<'all' | ClientComputedStatus>('all');
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [copiedHappId, setCopiedHappId] = useState<string | null>(null);
+  const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
+  const [encryptingId, setEncryptingId] = useState<string | null>(null);
+  const [happCache, setHappCache] = useState<Record<string, string>>({});
   const [rlsWriteNotice, setRlsWriteNotice] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -77,7 +85,7 @@ export default function App() {
     setToastMessage(msg);
     setTimeout(() => {
       setToastMessage((prev) => (prev === msg ? null : prev));
-    }, 3200);
+    }, 3400);
   }, []);
 
   const fetchClients = useCallback(async (isSilent = false) => {
@@ -167,15 +175,75 @@ export default function App() {
     });
   }, [clients, statusFilter, searchQuery]);
 
-  // Copy PAC URL handler
+  // Copy raw Sub URL handler
   const handleCopyPacUrl = (client: ProxyClient) => {
     const url = getClientPacUrl(client.username);
     navigator.clipboard.writeText(url);
     setCopiedId(client.id);
-    showToast(`تم نسخ رابط العميل ${client.username}`);
+    showToast(`تم نسخ الرابط المباشر للعميل ${client.username}`);
     setTimeout(() => {
       setCopiedId((prev) => (prev === client.id ? null : prev));
     }, 2000);
+  };
+
+  // Copy Encrypted Happ Code (happ://crypt5/...) handler
+  const handleCopyHappCode = async (client: ProxyClient) => {
+    try {
+      setEncryptingId(client.id);
+      let encrypted = happCache[client.username];
+      if (!encrypted) {
+        encrypted = await fetchHappEncryptedLink(client.username);
+        setHappCache((prev) => ({ ...prev, [client.username]: encrypted }));
+      }
+      await navigator.clipboard.writeText(encrypted);
+      setCopiedHappId(client.id);
+      showToast(`تم نسخ كود Happ المشفر (${client.username}) — بيانات البروكسي مخفية 100%`);
+      setTimeout(() => {
+        setCopiedHappId((prev) => (prev === client.id ? null : prev));
+      }, 2500);
+    } catch (err) {
+      console.error('Error generating Happ encrypted link:', err);
+      showToast('تعذر توليد الكود المشفر حالياً، يرجى المحاولة مرة أخرى');
+    } finally {
+      setEncryptingId(null);
+    }
+  };
+
+  // Copy Full Ready-to-Send Customer WhatsApp Message (App Links + Encrypted Code)
+  const handleCopyCustomerMessage = async (client: ProxyClient) => {
+    try {
+      setEncryptingId(client.id);
+      let encrypted = happCache[client.username];
+      if (!encrypted) {
+        encrypted = await fetchHappEncryptedLink(client.username);
+        setHappCache((prev) => ({ ...prev, [client.username]: encrypted }));
+      }
+      const message = [
+        `مرحباً بك، تم تفعيل اشتراكك لتشغيل تطبيق شام كاش (${client.username}) بنجاح ✅`,
+        `تاريخ انتهاء الاشتراك: ${client.expiry_date}`,
+        ``,
+        `1️⃣ حمّل تطبيق Happ الرسمي (مجاني وبدون إعلانات):`,
+        `• للآيفون (App Store):`,
+        HAPP_IOS_URL,
+        `• للأندرويد (تحميل مباشر APK):`,
+        HAPP_ANDROID_APK_URL,
+        ``,
+        `2️⃣ انسخ كود التفعيل المشفر التالي، وافتح تطبيق Happ واضغط على علامة (+) ثم (إضافة من الحافظة / Paste from Clipboard):`,
+        encrypted,
+      ].join('\n');
+
+      await navigator.clipboard.writeText(message);
+      setCopiedMsgId(client.id);
+      showToast(`تم نسخ رسالة التفعيل الكاملة مع كود Happ للعميل ${client.username}`);
+      setTimeout(() => {
+        setCopiedMsgId((prev) => (prev === client.id ? null : prev));
+      }, 2500);
+    } catch (err) {
+      console.error('Error generating customer message:', err);
+      showToast('تعذر تجهيز الرسالة المشفرة حالياً');
+    } finally {
+      setEncryptingId(null);
+    }
   };
 
   // Add or Edit Client handler
@@ -277,7 +345,7 @@ export default function App() {
         setLocalDelta(nextDelta);
         saveLocalDelta(nextDelta);
       }
-      showToast(`تمت إعادة تعيين الجهاز للعميل ${client.username}`);
+      showToast(`تمت إعادة تعيين الجهاز (فك القفل) للعميل ${client.username}`);
       return;
     }
 
@@ -411,7 +479,7 @@ export default function App() {
 
   // Default IP/Port from existing clients for convenience
   const defaultHost = clients[0]?.proxy_host || '185.190.140.20';
-  const defaultPort = clients[0]?.proxy_port || 8080;
+  const defaultPort = clients[0]?.proxy_port || 4145;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col" dir="rtl">
@@ -515,10 +583,10 @@ export default function App() {
           <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-2">
             <div>
               <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-                إدارة اشتراكات عملاء البروكسي
+                إدارة اشتراكات عملاء البروكسي (نظام Happ المشفر)
               </h1>
               <p className="text-xs sm:text-sm text-slate-400 mt-1">
-                تحكم كامل بحسابات جدول <code className="font-mono text-slate-300">proxy_clients</code>، حماية ربط الأجهزة (IP Binding)، وتوليد روابط الاشتراك المشفرة بـ Base64 لتطبيقات v2rayNG و V2Box.
+                توليد أكواد <code className="font-mono text-emerald-400">happ://crypt5</code> المشفرة لإخفاء بيانات البروكسي السوري 100% عن العميل، مع قفل الحساب تلقائياً على بصمة الهاتف (<code className="font-mono text-slate-300">X-HWID</code>).
               </p>
             </div>
 
@@ -581,7 +649,7 @@ export default function App() {
                 <span className="text-2xl sm:text-3xl font-bold font-mono tabular-nums text-rose-400">
                   {stats.inactive}
                 </span>
-                <span className="text-xs text-slate-500">اتصال مباشر DIRECT</span>
+                <span className="text-xs text-slate-500">مقطوع عن البروكسي</span>
               </div>
             </div>
           </div>
@@ -596,7 +664,7 @@ export default function App() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="بحث باسم المستخدم، الـ IP المسجل، أو عنوان IP البروكسي..."
+              placeholder="بحث باسم المستخدم، بصمة الجهاز المسجلة، أو عنوان IP البروكسي السوري..."
               className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-lg pr-10 pl-4 py-2 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none transition-colors"
             />
           </div>
@@ -672,7 +740,7 @@ export default function App() {
             <p className="text-xs sm:text-sm text-slate-400 max-w-md mx-auto">
               {searchQuery || statusFilter !== 'all'
                 ? 'جرب تغيير كلمات البحث أو اختيار عرض جميع العملاء.'
-                : 'ابدأ بإضافة أول عميل لتوليد رابط الاشتراك (Sub Link) الخاص به لتشغيل البروكسي على v2rayNG و V2Box.'}
+                : 'ابدأ بإضافة أول عميل لتوليد كود Happ المشفر (happ://crypt5) الخاص به.'}
             </p>
             <div className="pt-2">
               {searchQuery || statusFilter !== 'all' ? (
@@ -710,18 +778,21 @@ export default function App() {
                       <th className="py-3.5 px-4 whitespace-nowrap">الحالة</th>
                       <th className="py-3.5 px-4 whitespace-nowrap">تاريخ الانتهاء</th>
                       <th className="py-3.5 px-4 whitespace-nowrap">IP البروكسي</th>
-                      <th className="py-3.5 px-4 whitespace-nowrap">منفذ البروكسي</th>
-                      <th className="py-3.5 px-4 whitespace-nowrap">الـ IP المسجل</th>
-                      <th className="py-3.5 px-4 whitespace-nowrap">رابط الاشتراك (Sub Link)</th>
+                      <th className="py-3.5 px-4 whitespace-nowrap">المنفذ</th>
+                      <th className="py-3.5 px-4 whitespace-nowrap">بصمة الجهاز / IP المسجل</th>
+                      <th className="py-3.5 px-4 whitespace-nowrap">كود Happ المشفر (مخفي البيانات)</th>
                       <th className="py-3.5 px-4 text-left whitespace-nowrap">إجراءات</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/80 text-sm">
                     {filteredClients.map((client) => {
                       const statusInfo = getClientStatusInfo(client);
-                      const pacUrl = getClientPacUrl(client.username);
                       const isCopied = copiedId === client.id;
-                      const boundIp = client.registered_ip ? client.registered_ip.trim() : null;
+                      const isHappCopied = copiedHappId === client.id;
+                      const isMsgCopied = copiedMsgId === client.id;
+                      const isEncrypting = encryptingId === client.id;
+                      const boundDevice = client.registered_ip ? client.registered_ip.trim() : null;
+                      const isHwid = boundDevice?.startsWith('HWID:');
 
                       return (
                         <tr
@@ -809,50 +880,83 @@ export default function App() {
                             </span>
                           </td>
 
-                          {/* 6. Registered IP (IP Binding) */}
+                          {/* 6. Registered Device (HWID or IP) */}
                           <td className="py-3 px-4 whitespace-nowrap">
-                            {boundIp ? (
+                            {boundDevice ? (
                               <span
-                                className="font-mono text-xs sm:text-sm tabular-nums text-sky-400 font-medium"
+                                className="font-mono text-xs tabular-nums text-sky-400 font-medium inline-block max-w-[160px] truncate"
                                 dir="ltr"
+                                title={boundDevice}
                               >
-                                {boundIp}
+                                {isHwid ? `🔒 ${boundDevice}` : boundDevice}
                               </span>
                             ) : (
                               <span className="text-xs text-slate-500">غير مرتبط بعد</span>
                             )}
                           </td>
 
-                          {/* 7. Client PAC URL + Copy Button */}
+                          {/* 7. Encrypted Happ Code + Customer Message Copy */}
                           <td className="py-3 px-4">
-                            <div className="flex items-center gap-2 max-w-[260px] xl:max-w-xs">
-                              <code
-                                className="font-mono text-xs text-emerald-400 bg-slate-950 border border-slate-800 px-2.5 py-1.5 rounded-lg truncate flex-1 select-all"
-                                dir="ltr"
-                                title={pacUrl}
-                              >
-                                {pacUrl}
-                              </code>
+                            <div className="flex items-center gap-1.5">
                               <button
                                 type="button"
-                                onClick={() => handleCopyPacUrl(client)}
-                                className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 border ${
-                                  isCopied
-                                    ? 'bg-emerald-950/80 border-emerald-700 text-emerald-300'
-                                    : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200'
+                                disabled={isEncrypting}
+                                onClick={() => handleCopyHappCode(client)}
+                                title="نسخ كود Happ المشفر (happ://crypt5) الذي يخفي الـ IP والباسورد"
+                                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 border ${
+                                  isHappCopied
+                                    ? 'bg-emerald-950 border-emerald-600 text-emerald-300'
+                                    : 'bg-emerald-600 hover:bg-emerald-500 border-emerald-500 text-white'
                                 }`}
                               >
-                                {isCopied ? (
+                                {isHappCopied ? (
                                   <>
-                                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                                    <span>تم النسخ</span>
+                                    <Check className="w-3.5 h-3.5" />
+                                    <span>تم نسخ الكود المشفر</span>
                                   </>
                                 ) : (
                                   <>
-                                    <Copy className="w-3.5 h-3.5" />
-                                    <span>نسخ</span>
+                                    <ShieldCheck className="w-3.5 h-3.5" />
+                                    <span>{isEncrypting ? 'جاري التشفير...' : 'نسخ كود Happ 🔒'}</span>
                                   </>
                                 )}
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={isEncrypting}
+                                onClick={() => handleCopyCustomerMessage(client)}
+                                title="نسخ رسالة واتساب جاهزة للعميل تحتوي على روابط تحميل Happ + الكود المشفر"
+                                className={`px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 border ${
+                                  isMsgCopied
+                                    ? 'bg-sky-950 border-sky-600 text-sky-300'
+                                    : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200'
+                                }`}
+                              >
+                                {isMsgCopied ? (
+                                  <>
+                                    <Check className="w-3.5 h-3.5 text-sky-400" />
+                                    <span>تم نسخ الرسالة</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Share2 className="w-3.5 h-3.5 text-sky-400" />
+                                    <span>رسالة الزبون</span>
+                                  </>
+                                )}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleCopyPacUrl(client)}
+                                title="نسخ رابط الاشتراك العادي (Sub URL)"
+                                className={`p-1.5 rounded-lg text-xs flex items-center justify-center transition-colors border ${
+                                  isCopied
+                                    ? 'bg-emerald-950/80 border-emerald-700 text-emerald-300'
+                                    : 'bg-slate-950 hover:bg-slate-800 border-slate-800 text-slate-400 hover:text-slate-200'
+                                }`}
+                              >
+                                {isCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                               </button>
                             </div>
                           </td>
@@ -863,7 +967,7 @@ export default function App() {
                               <button
                                 type="button"
                                 onClick={() => handleResetDevice(client)}
-                                title="إعادة تعيين الجهاز (تفريغ الـ IP المسجل)"
+                                title="إعادة تعيين الجهاز (فك الارتباط بجهاز العميل الحالي)"
                                 className="px-2.5 py-1.5 rounded-lg bg-sky-950/50 hover:bg-sky-900/70 border border-sky-800/60 text-sky-300 hover:text-white text-xs font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap"
                               >
                                 <RotateCcw className="w-3.5 h-3.5" />
@@ -915,9 +1019,10 @@ export default function App() {
             <div className="md:hidden space-y-3">
               {filteredClients.map((client) => {
                 const statusInfo = getClientStatusInfo(client);
-                const pacUrl = getClientPacUrl(client.username);
-                const isCopied = copiedId === client.id;
-                const boundIp = client.registered_ip ? client.registered_ip.trim() : null;
+                const isHappCopied = copiedHappId === client.id;
+                const isMsgCopied = copiedMsgId === client.id;
+                const isEncrypting = encryptingId === client.id;
+                const boundDevice = client.registered_ip ? client.registered_ip.trim() : null;
 
                 return (
                   <div
@@ -968,7 +1073,7 @@ export default function App() {
                       </button>
                     </div>
 
-                    {/* Details Grid: Expiry, Proxy IP:Port, Registered IP */}
+                    {/* Details Grid: Expiry, Proxy IP:Port, Registered Device */}
                     <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-800/80 text-xs">
                       <div>
                         <span className="text-slate-500 block">تاريخ الانتهاء</span>
@@ -990,10 +1095,10 @@ export default function App() {
                         </div>
                       </div>
                       <div>
-                        <span className="text-slate-500 block">الـ IP المسجل</span>
-                        {boundIp ? (
-                          <span className="font-mono tabular-nums text-sky-400 mt-0.5 block" dir="ltr">
-                            {boundIp}
+                        <span className="text-slate-500 block">الجهاز المسجل</span>
+                        {boundDevice ? (
+                          <span className="font-mono tabular-nums text-sky-400 mt-0.5 block truncate" dir="ltr">
+                            {boundDevice}
                           </span>
                         ) : (
                           <span className="text-slate-500 mt-0.5 block">غير مرتبط بعد</span>
@@ -1001,44 +1106,58 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Client Sub Link Box + One-Click Copy */}
+                    {/* Encrypted Happ Code Box + One-Click Copy */}
                     <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-2">
                       <div className="text-[11px] text-slate-400 flex items-center justify-between">
-                        <span>رابط الاشتراك (Sub Link):</span>
-                        <a
-                          href={pacUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-slate-400 hover:text-white inline-flex items-center gap-1"
+                        <span>تفعيل العميل في تطبيق Happ (بيانات مخفية 100%):</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          disabled={isEncrypting}
+                          onClick={() => handleCopyHappCode(client)}
+                          className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
+                            isHappCopied
+                              ? 'bg-emerald-950 border-emerald-700 text-emerald-300'
+                              : 'bg-emerald-600 hover:bg-emerald-500 border-emerald-500 text-white'
+                          }`}
                         >
-                          <span>فتح</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
+                          {isHappCopied ? (
+                            <>
+                              <Check className="w-4 h-4" />
+                              <span>تم نسخ الكود</span>
+                            </>
+                          ) : (
+                            <>
+                              <ShieldCheck className="w-4 h-4" />
+                              <span>{isEncrypting ? 'جاري التشفير...' : 'نسخ كود Happ 🔒'}</span>
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={isEncrypting}
+                          onClick={() => handleCopyCustomerMessage(client)}
+                          className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
+                            isMsgCopied
+                              ? 'bg-sky-950 border-sky-700 text-sky-300'
+                              : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-100'
+                          }`}
+                        >
+                          {isMsgCopied ? (
+                            <>
+                              <Check className="w-4 h-4 text-sky-400" />
+                              <span>تم نسخ الرسالة</span>
+                            </>
+                          ) : (
+                            <>
+                              <Share2 className="w-4 h-4 text-sky-400" />
+                              <span>نسخ رسالة الزبون</span>
+                            </>
+                          )}
+                        </button>
                       </div>
-                      <div className="font-mono text-xs text-emerald-400 break-all select-all" dir="ltr">
-                        {pacUrl}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleCopyPacUrl(client)}
-                        className={`w-full py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
-                          isCopied
-                            ? 'bg-emerald-950 border-emerald-700 text-emerald-300'
-                            : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-white'
-                        }`}
-                      >
-                        {isCopied ? (
-                          <>
-                            <Check className="w-4 h-4 text-emerald-400" />
-                            <span>تم نسخ رابط العميل بنجاح</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-4 h-4" />
-                            <span>نسخ رابط العميل</span>
-                          </>
-                        )}
-                      </button>
                     </div>
 
                     {/* Bottom Action Buttons */}
@@ -1049,7 +1168,7 @@ export default function App() {
                         className="w-full py-2 px-3 rounded-lg bg-sky-950/50 hover:bg-sky-900/70 border border-sky-800/60 text-sky-300 text-xs font-medium flex items-center justify-center gap-1.5 whitespace-nowrap"
                       >
                         <RotateCcw className="w-3.5 h-3.5" />
-                        <span>إعادة تعيين الجهاز (Reset Device)</span>
+                        <span>إعادة تعيين الجهاز (فك القفل)</span>
                       </button>
                       <button
                         type="button"
@@ -1087,9 +1206,9 @@ export default function App() {
       {/* Quiet Footer */}
       <footer className="border-t border-slate-800/80 py-5 px-4 sm:px-6 text-xs text-slate-500">
         <div className="max-w-[1360px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>لوحة تحكم مشتركي بروكسي شام كاش · متصلة بقاعدة بيانات Supabase</span>
+          <span>لوحة تحكم مشتركي بروكسي شام كاش · متصلة بقاعدة بيانات Supabase ونظام تشفير Happ</span>
           <span className="font-mono" dir="ltr">
-            https://shamcash-proxy-api.vercel.app/sub/&#123;username&#125;
+            happ://crypt5/... · HWID Device Lock
           </span>
         </div>
       </footer>

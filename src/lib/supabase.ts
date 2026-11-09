@@ -2,7 +2,12 @@ import { createClient } from '@supabase/supabase-js';
 
 export const SUPABASE_URL = 'https://cnjsrlfggdviuzpgpnso.supabase.co';
 export const SUPABASE_KEY = 'sb_publishable_nlGdq-99HG3MYESfqmQQ3w_sW0KNrvf';
-export const SUB_BASE_URL = 'https://shamcash-proxy-api.vercel.app/sub';
+export const API_ROOT_URL = 'https://shamcash-proxy-api.vercel.app';
+export const SUB_BASE_URL = `${API_ROOT_URL}/sub`;
+
+export const HAPP_IOS_URL = 'https://apps.apple.com/us/app/happ-proxy-utility/id6504287215';
+export const HAPP_ANDROID_APK_URL =
+  'https://github.com/Happ-proxy/happ-android/releases/latest/download/Happ.apk';
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -28,6 +33,55 @@ export function getClientSubUrl(username: string): string {
 
 export function getClientPacUrl(username: string): string {
   return getClientSubUrl(username);
+}
+
+/**
+ * Generates an encrypted Happ link (happ://crypt5/...) that hides all proxy IP/Port/Credentials
+ * and disables editing/sharing inside the Happ application on iOS and Android.
+ */
+export async function fetchHappEncryptedLink(username: string): Promise<string> {
+  const cleanUsername = username.trim();
+  const targetSubUrl = getClientSubUrl(cleanUsername);
+
+  // 1. Try local/same-origin API route first (/api/happ/:username)
+  try {
+    const localRes = await fetch(`/api/happ/${encodeURIComponent(cleanUsername)}`);
+    if (localRes.ok) {
+      const data = await localRes.json();
+      if (data?.encrypted_link) return data.encrypted_link;
+    }
+  } catch {
+    // fallback to remote Vercel API
+  }
+
+  // 2. Try deployed Vercel API endpoint (https://shamcash-proxy-api.vercel.app/happ/:username)
+  try {
+    const remoteRes = await fetch(`${API_ROOT_URL}/happ/${encodeURIComponent(cleanUsername)}`);
+    if (remoteRes.ok) {
+      const data = await remoteRes.json();
+      if (data?.encrypted_link) return data.encrypted_link;
+    }
+  } catch {
+    // fallback to direct Happ Crypto API
+  }
+
+  // 3. Direct call to official Happ Crypto API
+  const directRes = await fetch('https://crypto.happ.su/api-v2.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: targetSubUrl }),
+  });
+
+  if (!directRes.ok) {
+    throw new Error('Failed to encrypt link for Happ');
+  }
+
+  const directData = await directRes.json();
+  if (!directData?.encrypted_link) {
+    throw new Error('Invalid encrypted link response');
+  }
+
+  return directData.encrypted_link;
 }
 
 export function getClientStatusInfo(client: ProxyClient): {
