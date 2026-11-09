@@ -28,6 +28,8 @@ import {
   getClientStatusInfo,
   addDaysToDateString,
   fetchHappEncryptedLink,
+  normalizeProxyClient,
+  packProxyHostWithAuth,
   HAPP_IOS_URL,
   HAPP_ANDROID_APK_URL,
 } from './lib/supabase';
@@ -104,7 +106,7 @@ export default function App() {
         .order('created_at', { ascending: false });
 
       if (!error && data) {
-        setRemoteClients(data as ProxyClient[]);
+        setRemoteClients((data as ProxyClient[]).map(normalizeProxyClient));
       }
     } finally {
       setLoading(false);
@@ -329,14 +331,27 @@ export default function App() {
     clientData: Omit<ProxyClient, 'id' | 'created_at' | 'updated_at'>,
     id?: string
   ) => {
+    const packedHost = packProxyHostWithAuth(
+      clientData.proxy_host,
+      clientData.proxy_username,
+      clientData.proxy_password
+    );
+    const dbPayload = {
+      username: clientData.username,
+      is_active: clientData.is_active,
+      expiry_date: clientData.expiry_date,
+      proxy_host: packedHost,
+      proxy_port: clientData.proxy_port,
+    };
+
     if (modalMode === 'add') {
       const { data, error } = await supabase
         .from('proxy_clients')
-        .insert([{ ...clientData, registered_ip: null }])
+        .insert([{ ...dbPayload, registered_ip: null }])
         .select();
 
       if (!error && data && data.length > 0) {
-        const created = data[0] as ProxyClient;
+        const created = normalizeProxyClient(data[0] as ProxyClient);
         setRemoteClients((prev) => [created, ...prev]);
         showToast(`تمت إضافة ${created.username}`);
         return;
@@ -360,14 +375,14 @@ export default function App() {
       const { data, error } = await supabase
         .from('proxy_clients')
         .update({
-          ...clientData,
+          ...dbPayload,
           updated_at: new Date().toISOString(),
         })
         .eq('id', id)
         .select();
 
       if (!error && data && data.length > 0) {
-        const updated = data[0] as ProxyClient;
+        const updated = normalizeProxyClient(data[0] as ProxyClient);
         setRemoteClients((prev) => prev.map((c) => (c.id === id ? updated : c)));
         if (localDelta.upserted[id]) {
           const nextUpserted = { ...localDelta.upserted };
@@ -410,7 +425,7 @@ export default function App() {
       .select();
 
     if (!error && data && data.length > 0) {
-      const updated = data[0] as ProxyClient;
+      const updated = normalizeProxyClient(data[0] as ProxyClient);
       setRemoteClients((prev) => prev.map((c) => (c.id === client.id ? updated : c)));
       showToast(`تم فك قفل الجهاز · ${client.username}`);
       return;
@@ -440,7 +455,7 @@ export default function App() {
       .select();
 
     if (!error && data && data.length > 0) {
-      const updated = data[0] as ProxyClient;
+      const updated = normalizeProxyClient(data[0] as ProxyClient);
       setRemoteClients((prev) => prev.map((c) => (c.id === client.id ? updated : c)));
       showToast(nextActive ? `تم تفعيل ${client.username}` : `تم إيقاف ${client.username}`);
       return;
@@ -474,7 +489,7 @@ export default function App() {
       .select();
 
     if (!error && data && data.length > 0) {
-      const updated = data[0] as ProxyClient;
+      const updated = normalizeProxyClient(data[0] as ProxyClient);
       setRemoteClients((prev) => prev.map((c) => (c.id === client.id ? updated : c)));
       showToast(`تم تمديد ${client.username} (+30 يوم)`);
       return;

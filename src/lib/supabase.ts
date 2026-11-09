@@ -27,6 +27,51 @@ export interface ProxyClient {
 
 export type ClientComputedStatus = 'active' | 'expired' | 'inactive';
 
+/**
+ * Unpacks embedded "user:pass@host" from proxy_host if proxy_username/proxy_password
+ * were stored inside proxy_host.
+ */
+export function normalizeProxyClient(raw: ProxyClient): ProxyClient {
+  let host = String(raw.proxy_host || '').trim();
+  let pUser = raw.proxy_username ? String(raw.proxy_username).trim() : null;
+  let pPass = raw.proxy_password ? String(raw.proxy_password).trim() : null;
+
+  if (host.includes('@')) {
+    const atIndex = host.lastIndexOf('@');
+    const authPart = host.slice(0, atIndex);
+    host = host.slice(atIndex + 1).trim();
+    if (!pUser && authPart.includes(':')) {
+      const colonIndex = authPart.indexOf(':');
+      pUser = authPart.slice(0, colonIndex).trim() || null;
+      pPass = authPart.slice(colonIndex + 1).trim() || null;
+    }
+  }
+
+  return {
+    ...raw,
+    proxy_host: host,
+    proxy_username: pUser,
+    proxy_password: pPass,
+  };
+}
+
+/**
+ * Packs "user:pass@host" into proxy_host when saving to a table without separate auth columns.
+ */
+export function packProxyHostWithAuth(
+  host: string,
+  username?: string | null,
+  password?: string | null
+): string {
+  const cleanHost = host.trim().replace(/^.*@/, '');
+  const u = username ? username.trim() : '';
+  const p = password ? password.trim() : '';
+  if (u && p) {
+    return `${u}:${p}@${cleanHost}`;
+  }
+  return cleanHost;
+}
+
 export function getClientSubUrl(username: string): string {
   return `${SUB_BASE_URL}/${encodeURIComponent(username.trim())}`;
 }

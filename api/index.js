@@ -225,11 +225,22 @@ async function handleSubscriptionRequest(req, res) {
 
     const clientData = result.client;
 
-    // 1. Extract proxy details from Supabase
-    const host = String(clientData.proxy_host).trim();
+    // 1. Extract proxy details from Supabase (supports both separate columns and user:pass@host in proxy_host)
+    let host = String(clientData.proxy_host).trim();
     const port = Number(clientData.proxy_port);
-    const pUser = clientData.proxy_username ? String(clientData.proxy_username).trim() : '';
-    const pPass = clientData.proxy_password ? String(clientData.proxy_password).trim() : '';
+    let pUser = clientData.proxy_username ? String(clientData.proxy_username).trim() : '';
+    let pPass = clientData.proxy_password ? String(clientData.proxy_password).trim() : '';
+
+    if (host.includes('@')) {
+      const atIndex = host.lastIndexOf('@');
+      const authPart = host.slice(0, atIndex);
+      host = host.slice(atIndex + 1).trim();
+      if (!pUser && authPart.includes(':')) {
+        const colonIndex = authPart.indexOf(':');
+        pUser = authPart.slice(0, colonIndex).trim();
+        pPass = authPart.slice(colonIndex + 1).trim();
+      }
+    }
 
     // 2. Encode auth section (user:pass or ":" for unauthenticated proxies)
     const rawAuth = pUser && pPass ? `${pUser}:${pPass}` : ':';
