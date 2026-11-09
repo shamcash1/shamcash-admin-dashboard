@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, Server, User, Check, Copy, AlertCircle, Lock, KeyRound } from 'lucide-react';
-import { ProxyClient, getClientPacUrl, addDaysToDateString } from '../lib/supabase';
+import { X, Calendar, Server, User, AlertCircle, Lock, KeyRound } from 'lucide-react';
+import { ProxyClient, addDaysToDateString } from '../lib/supabase';
 
 interface ClientModalProps {
   isOpen: boolean;
@@ -23,8 +23,8 @@ export const ClientModal: React.FC<ClientModalProps> = ({
   mode,
   initialClient,
   existingUsernames,
-  defaultProxyHost = '185.190.140.20',
-  defaultProxyPort = 8080,
+  defaultProxyHost = '72.195.34.58',
+  defaultProxyPort = 4145,
   defaultProxyUsername = '',
   defaultProxyPassword = '',
   onClose,
@@ -39,7 +39,6 @@ export const ClientModal: React.FC<ClientModalProps> = ({
   const [proxyPassword, setProxyPassword] = useState(defaultProxyPassword);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [copiedPreview, setCopiedPreview] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -74,20 +73,10 @@ export const ClientModal: React.FC<ClientModalProps> = ({
   if (!isOpen) return null;
 
   const trimmedUsername = username.trim().replace(/\s+/g, '_');
-  const previewUrl = trimmedUsername
-    ? getClientPacUrl(trimmedUsername)
-    : 'https://shamcash-proxy-api.vercel.app/sub/{username}';
 
   const handleQuickDuration = (days: number) => {
     const base = mode === 'edit' ? expiryDate : null;
     setExpiryDate(addDaysToDateString(base, days));
-  };
-
-  const handleCopyPreview = () => {
-    if (!trimmedUsername) return;
-    navigator.clipboard.writeText(previewUrl);
-    setCopiedPreview(true);
-    setTimeout(() => setCopiedPreview(false), 1800);
   };
 
   const handleFormSubmit = async (e: React.FormEvent) => {
@@ -95,12 +84,12 @@ export const ClientModal: React.FC<ClientModalProps> = ({
     setError(null);
 
     if (!trimmedUsername) {
-      setError('يرجى إدخال اسم المستخدم الخاص بالعميل.');
+      setError('يرجى إدخال اسم المشترك.');
       return;
     }
 
     if (!/^[a-zA-Z0-9_.-]+$/.test(trimmedUsername)) {
-      setError('اسم المستخدم يجب أن يحتوي على أحرف إنجليزية، أرقام، أو (_ . -) فقط ليعمل في الرابط.');
+      setError('اسم المشترك يقبل أحرف إنجليزية وأرقام فقط.');
       return;
     }
 
@@ -110,12 +99,12 @@ export const ClientModal: React.FC<ClientModalProps> = ({
         (mode === 'add' || initialClient?.username.toLowerCase() !== trimmedUsername.toLowerCase())
     );
     if (isDuplicate) {
-      setError('اسم المستخدم هذا مسجل مسبقاً لعميل آخر.');
+      setError('اسم المشترك مسجل مسبقاً.');
       return;
     }
 
     if (!expiryDate) {
-      setError('يرجى تحديد تاريخ انتهاء الاشتراك.');
+      setError('يرجى تحديد تاريخ الانتهاء.');
       return;
     }
 
@@ -126,7 +115,7 @@ export const ClientModal: React.FC<ClientModalProps> = ({
 
     const portNum = Number(proxyPort);
     if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
-      setError('منفذ البروكسي (Port) يجب أن يكون رقماً صحيحاً بين 1 و 65535.');
+      setError('منفذ البروكسي غير صالح.');
       return;
     }
 
@@ -146,7 +135,7 @@ export const ClientModal: React.FC<ClientModalProps> = ({
       );
       onClose();
     } catch (err: any) {
-      setError(err.message || 'حدث خطأ أثناء حفظ بيانات العميل.');
+      setError(err.message || 'تعذر حفظ البيانات.');
     } finally {
       setSubmitting(false);
     }
@@ -154,239 +143,188 @@ export const ClientModal: React.FC<ClientModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xs overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs overflow-y-auto"
       role="dialog"
       aria-modal="true"
-      aria-labelledby="modal-title"
     >
-      <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-xl shadow-2xl overflow-hidden my-auto">
-        {/* Modal Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800">
-          <h2 id="modal-title" className="text-base font-bold text-slate-100">
-            {mode === 'add' ? 'إضافة عميل بروكسي جديد' : `تعديل بيانات العميل: ${initialClient?.username}`}
+      <div className="w-full max-w-md bg-[#0E131F] border border-slate-800/90 rounded-2xl shadow-2xl overflow-hidden my-auto">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800/80">
+          <h2 className="text-sm font-bold text-white">
+            {mode === 'add' ? 'إضافة مشترك جديد' : `تعديل المشترك · ${initialClient?.username}`}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
-            aria-label="إغلاق النافذة"
+            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800/80 rounded-lg transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Form */}
         <form onSubmit={handleFormSubmit} className="p-6 space-y-4">
           {error && (
-            <div className="p-3.5 rounded-lg bg-rose-950/50 border border-rose-800/70 text-rose-300 text-xs flex items-center gap-2.5">
+            <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-800/60 text-rose-300 text-xs flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
               <span>{error}</span>
             </div>
           )}
 
-          {/* Username & Active Toggle Row */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="sm:col-span-2">
-              <label htmlFor="client-username" className="block text-xs font-medium text-slate-300 mb-1.5">
-                اسم المستخدم (Username)
+          {/* Username & Status */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-2">
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                اسم المشترك
               </label>
               <div className="relative">
                 <User className="w-4 h-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
-                  id="client-username"
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="مثال: ahmad_vip"
+                  placeholder="client_name"
                   dir="ltr"
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-lg pr-9 pl-3 py-2.5 text-sm font-mono text-slate-100 placeholder-slate-600 focus:outline-none transition-colors"
+                  className="w-full bg-[#070A10] border border-slate-800 focus:border-emerald-500 rounded-xl pr-9 pl-3 py-2.5 text-sm font-mono text-white placeholder-slate-600 focus:outline-none transition-colors"
                   autoFocus={mode === 'add'}
                 />
               </div>
             </div>
 
             <div>
-              <span className="block text-xs font-medium text-slate-300 mb-1.5">حالة الحساب</span>
+              <span className="block text-xs font-medium text-slate-400 mb-1.5">الحالة</span>
               <button
                 type="button"
                 onClick={() => setIsActive(!isActive)}
-                className={`w-full h-[42px] px-3 rounded-lg border text-xs font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap ${
+                className={`w-full h-[42px] px-3 rounded-xl border text-xs font-semibold flex items-center justify-center transition-colors ${
                   isActive
-                    ? 'bg-emerald-950/40 border-emerald-700/60 text-emerald-300 hover:bg-emerald-950/60'
-                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                    ? 'bg-emerald-950/50 border-emerald-700/60 text-emerald-300'
+                    : 'bg-[#070A10] border-slate-800 text-slate-400'
                 }`}
               >
-                <span>{isActive ? 'نشط ومفعل' : 'موقوف مؤقتاً'}</span>
+                {isActive ? 'نشط' : 'موقوف'}
               </button>
             </div>
           </div>
 
-          {/* Expiry Date + Quick Extension Buttons */}
+          {/* Expiry Date */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label htmlFor="client-expiry" className="text-xs font-medium text-slate-300">
-                تاريخ انتهاء الصلاحية (Expiry Date)
-              </label>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => handleQuickDuration(7)}
-                  className="px-2 py-0.5 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition-colors whitespace-nowrap"
-                >
-                  +7 أيام
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleQuickDuration(30)}
-                  className="px-2 py-0.5 text-[11px] bg-slate-800 hover:bg-slate-700 text-emerald-300 rounded transition-colors whitespace-nowrap"
-                >
-                  +30 يوم
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleQuickDuration(90)}
-                  className="px-2 py-0.5 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition-colors whitespace-nowrap"
-                >
-                  +3 أشهر
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleQuickDuration(365)}
-                  className="px-2 py-0.5 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition-colors whitespace-nowrap"
-                >
-                  +سنة
-                </button>
+              <label className="text-xs font-medium text-slate-400">تاريخ الانتهاء</label>
+              <div className="flex items-center gap-1">
+                {[
+                  { label: '+7ي', days: 7 },
+                  { label: '+30ي', days: 30 },
+                  { label: '+90ي', days: 90 },
+                  { label: '+سنة', days: 365 },
+                ].map((preset) => (
+                  <button
+                    key={preset.days}
+                    type="button"
+                    onClick={() => handleQuickDuration(preset.days)}
+                    className="px-2 py-0.5 text-[11px] font-medium bg-slate-800/80 hover:bg-slate-700 text-slate-300 rounded-md transition-colors"
+                  >
+                    {preset.label}
+                  </button>
+                ))}
               </div>
             </div>
             <div className="relative">
               <Calendar className="w-4 h-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
-                id="client-expiry"
                 type="date"
                 value={expiryDate}
                 onChange={(e) => setExpiryDate(e.target.value)}
                 dir="ltr"
-                className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-lg pr-9 pl-3 py-2.5 text-sm font-mono tabular-nums text-slate-100 focus:outline-none transition-colors"
+                className="w-full bg-[#070A10] border border-slate-800 focus:border-emerald-500 rounded-xl pr-9 pl-3 py-2.5 text-sm font-mono tabular-nums text-white focus:outline-none transition-colors"
               />
             </div>
           </div>
 
-          {/* Proxy Host & Port */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="sm:col-span-2">
-              <label htmlFor="client-host" className="block text-xs font-medium text-slate-300 mb-1.5">
-                عنوان IP البروكسي (Proxy IP)
+          {/* Proxy IP & Port */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-2">
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                IP البروكسي
               </label>
               <div className="relative">
                 <Server className="w-4 h-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
-                  id="client-host"
                   type="text"
                   value={proxyHost}
                   onChange={(e) => setProxyHost(e.target.value)}
                   placeholder="185.190.140.20"
                   dir="ltr"
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-lg pr-9 pl-3 py-2.5 text-sm font-mono tabular-nums text-slate-100 placeholder-slate-600 focus:outline-none transition-colors"
+                  className="w-full bg-[#070A10] border border-slate-800 focus:border-emerald-500 rounded-xl pr-9 pl-3 py-2.5 text-sm font-mono tabular-nums text-white placeholder-slate-600 focus:outline-none transition-colors"
                 />
               </div>
             </div>
 
             <div>
-              <label htmlFor="client-port" className="block text-xs font-medium text-slate-300 mb-1.5">
-                منفذ البروكسي (Port)
-              </label>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">المنفذ</label>
               <input
-                id="client-port"
                 type="number"
                 min={1}
                 max={65535}
                 value={proxyPort}
                 onChange={(e) => setProxyPort(e.target.value)}
-                placeholder="8080"
+                placeholder="4145"
                 dir="ltr"
-                className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-lg px-3 py-2.5 text-sm font-mono tabular-nums text-slate-100 placeholder-slate-600 focus:outline-none transition-colors"
+                className="w-full bg-[#070A10] border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2.5 text-sm font-mono tabular-nums text-white placeholder-slate-600 focus:outline-none transition-colors"
               />
             </div>
           </div>
 
-          {/* Optional Proxy Authentication (proxy_username & proxy_password) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+          {/* Proxy Username & Password */}
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label htmlFor="proxy-username" className="block text-xs font-medium text-slate-300 mb-1.5">
-                اسم مستخدم البروكسي <span className="text-slate-500 font-normal">(اختياري)</span>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                يوزر البروكسي
               </label>
               <div className="relative">
                 <Lock className="w-4 h-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
-                  id="proxy-username"
                   type="text"
                   value={proxyUsername}
                   onChange={(e) => setProxyUsername(e.target.value)}
-                  placeholder="proxy_user"
+                  placeholder="اختياري"
                   dir="ltr"
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-lg pr-9 pl-3 py-2.5 text-sm font-mono text-slate-100 placeholder-slate-600 focus:outline-none transition-colors"
+                  className="w-full bg-[#070A10] border border-slate-800 focus:border-emerald-500 rounded-xl pr-9 pl-3 py-2.5 text-sm font-mono text-white placeholder-slate-600 focus:outline-none transition-colors"
                 />
               </div>
             </div>
 
             <div>
-              <label htmlFor="proxy-password" className="block text-xs font-medium text-slate-300 mb-1.5">
-                كلمة مرور البروكسي <span className="text-slate-500 font-normal">(اختياري)</span>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                باسورد البروكسي
               </label>
               <div className="relative">
                 <KeyRound className="w-4 h-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
-                  id="proxy-password"
                   type="text"
                   value={proxyPassword}
                   onChange={(e) => setProxyPassword(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder="اختياري"
                   dir="ltr"
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-lg pr-9 pl-3 py-2.5 text-sm font-mono text-slate-100 placeholder-slate-600 focus:outline-none transition-colors"
+                  className="w-full bg-[#070A10] border border-slate-800 focus:border-emerald-500 rounded-xl pr-9 pl-3 py-2.5 text-sm font-mono text-white placeholder-slate-600 focus:outline-none transition-colors"
                 />
               </div>
             </div>
           </div>
 
-          {/* Live Sub Link Preview */}
-          <div className="p-3.5 rounded-lg bg-slate-950 border border-slate-800/90 space-y-1.5">
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span>رابط الاشتراك (Sub Link):</span>
-              {trimmedUsername && (
-                <button
-                  type="button"
-                  onClick={handleCopyPreview}
-                  className="text-emerald-400 hover:text-emerald-300 flex items-center gap-1 text-xs font-medium"
-                >
-                  {copiedPreview ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedPreview ? 'تم النسخ' : 'نسخ الرابط'}</span>
-                </button>
-              )}
-            </div>
-            <div className="font-mono text-xs text-emerald-400 break-all select-all" dir="ltr">
-              {previewUrl}
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-800">
+          {/* Submit */}
+          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-800/80">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap"
+              className="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white bg-slate-800/70 hover:bg-slate-800 rounded-xl transition-colors"
             >
               إلغاء
             </button>
             <button
               type="submit"
               disabled={submitting}
-              className="px-5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap"
+              className="px-5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-xl transition-colors"
             >
-              {submitting
-                ? 'جاري الحفظ...'
-                : mode === 'add'
-                ? 'إضافة العميل الآن'
-                : 'حفظ التعديلات'}
+              {submitting ? 'جاري الحفظ...' : mode === 'add' ? 'إضافة المشترك' : 'حفظ التعديلات'}
             </button>
           </div>
         </form>
