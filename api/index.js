@@ -235,8 +235,8 @@ async function handleSubscriptionRequest(req, res) {
     const rawAuth = pUser && pPass ? `${pUser}:${pPass}` : ':';
     const encodedAuth = Buffer.from(rawAuth, 'utf-8').toString('base64');
 
-    // 3. Build URI
-    const tag = encodeURIComponent(`ShamCash-${clientData.username}`);
+    // 3. Build URI with VPN Alishop branding
+    const tag = encodeURIComponent(`VPN Alishop - ${clientData.username}`);
     const uri = `socks://${encodedAuth}@${host}:${port}#${tag}`;
 
     // 4. Compute expiry timestamp in Unix seconds for Happ / subscription header
@@ -247,7 +247,7 @@ async function handleSubscriptionRequest(req, res) {
     const expireUnix = Math.floor(expiryDateObj.getTime() / 1000);
 
     // 5. Set Official Happ App Management & Subscription Headers
-    const profileTitlePlain = `ShamCash-${clientData.username}`.slice(0, 25);
+    const profileTitlePlain = `VPN Alishop - ${clientData.username}`.slice(0, 25);
     const profileTitleBase64 = Buffer.from(profileTitlePlain, 'utf-8').toString('base64');
 
     res.setHeader('profile-title', `base64:${profileTitleBase64}`);
