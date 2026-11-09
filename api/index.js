@@ -70,41 +70,6 @@ function getCallerHwid(req) {
   return hwid.trim();
 }
 
-// Helper to detect if a request is coming from a plain web browser (to prevent browser snooping)
-function isPlainWebBrowserRequest(req) {
-  const ua = String(req.headers['user-agent'] || '').toLowerCase();
-  const accept = String(req.headers['accept'] || '').toLowerCase();
-  const hwid = getCallerHwid(req);
-
-  // If request has HWID or known proxy client User-Agent, allow it
-  if (hwid) return false;
-  if (
-    ua.includes('happ') ||
-    ua.includes('v2ray') ||
-    ua.includes('v2box') ||
-    ua.includes('hiddify') ||
-    ua.includes('karing') ||
-    ua.includes('sing-box') ||
-    ua.includes('sfa') ||
-    ua.includes('streisand') ||
-    ua.includes('shadowrocket') ||
-    ua.includes('clash') ||
-    ua.includes('dart') ||
-    ua.includes('go-http-client') ||
-    ua.includes('cfnetwork') ||
-    ua.includes('okhttp')
-  ) {
-    return false;
-  }
-
-  // If it explicitly requests text/html from a standard Mozilla/Chrome/Safari browser
-  if (accept.includes('text/html') && ua.includes('mozilla/')) {
-    return true;
-  }
-
-  return false;
-}
-
 // Helper function to verify client subscription and Device (HWID / IP) binding
 async function verifyAndBindClient(username, callerIp, callerHwid = '') {
   if (!username || username.trim() === '') {
@@ -169,8 +134,8 @@ async function verifyAndBindClient(username, callerIp, callerHwid = '') {
     return { allowed: true, reason: 'bound_first_device', client: data };
   }
 
-  // 2. If previously bound to an IP, and now Happ sends a permanent HWID from the same IP, upgrade to HWID lock
-  if (!registeredDevice.startsWith('HWID:') && callerHwid && registeredDevice === callerIp) {
+  // 2. If previously bound to a temporary IP, and now Happ sends a permanent HWID, upgrade to HWID lock
+  if (!registeredDevice.startsWith('HWID:') && callerHwid) {
     const upgradedId = `HWID:${callerHwid}`;
     await supabase
       .from('proxy_clients')
@@ -199,28 +164,22 @@ async function verifyAndBindClient(username, callerIp, callerHwid = '') {
 
 // ============================================================
 // 1. SUBSCRIPTION ENDPOINT: GET /sub/:username
-// Optimized for Happ (Encrypted + HWID Lock) & v2rayNG / V2Box
+// Compatible with Happ (Plain/Base64 + HWID Lock) & v2rayNG / V2Box
 // ============================================================
 async function handleSubscriptionRequest(req, res) {
   const { username } = req.params;
   const callerIp = getCallerIp(req);
   const callerHwid = getCallerHwid(req);
+  const ua = String(req.headers['user-agent'] || '').toLowerCase();
 
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-
-  // Block plain web browsers from opening the raw subscription link to inspect Base64
-  if (isPlainWebBrowserRequest(req) && req.query?.allow_browser !== '1') {
-    return res
-      .status(403)
-      .send('Access Denied: Protected Subscription. Please import the encrypted happ:// code inside the Happ app.');
-  }
 
   try {
     const result = await verifyAndBindClient(username, callerIp, callerHwid);
 
     if (!result.allowed || !result.client) {
-      return res.status(200).send('');
+      return res.status(403).send('Subscription inactive, expired, or locked to another device.');
     }
 
     const clientData = result.client;
@@ -242,22 +201,14 @@ async function handleSubscriptionRequest(req, res) {
       }
     }
 
-    // 2. Encode auth section (user:pass or ":" for unauthenticated proxies)
-    const rawAuth = pUser && pPass ? `${pUser}:${pPass}` : ':';
-    const encodedAuth = Buffer.from(rawAuth, 'utf-8').toString('base64');
-
-    // 3. Build URI with VPN Alishop branding
-    const tag = encodeURIComponent(`VPN Alishop - ${clientData.username}`);
-    const uri = `socks://${encodedAuth}@${host}:${port}#${tag}`;
-
-    // 4. Compute expiry timestamp in Unix seconds for Happ / subscription header
+    // 2. Compute expiry timestamp in Unix seconds for Happ / subscription header
     const expiryDateObj = new Date(clientData.expiry_date);
     if (!String(clientData.expiry_date).includes('T')) {
       expiryDateObj.setHours(23, 59, 59, 999);
     }
     const expireUnix = Math.floor(expiryDateObj.getTime() / 1000);
 
-    // 5. Set Official Happ App Management & Subscription Headers
+    // 3. Set Official Happ App Management & Subscription Headers
     const profileTitlePlain = `VPN Alishop - ${clientData.username}`.slice(0, 25);
     const profileTitleBase64 = Buffer.from(profileTitlePlain, 'utf-8').toString('base64');
 
@@ -269,13 +220,34 @@ async function handleSubscriptionRequest(req, res) {
       `upload=0; download=0; total=107374182400; expire=${expireUnix}`
     );
 
-    // 6. Base64 encode the final subscription payload
+    const tag = encodeURIComponent(`VPN Alishop - ${clientData.username}`);
+
+    // 4. If requested by Happ (or with HWID header), return Happ's native plain-text subscription format
+    // Per https://www.happ.su/main/dev-docs/examples-of-links-and-parameters.md:
+    // Plain text: socks://user:pass@1.2.3.4:443#Name or Partial Base64: socks://<base64_user_pass>@1.2.3.4:443#Name
+    const isHappClient = ua.includes('happ') || Boolean(callerHwid) || req.query?.client === 'happ';
+
+    if (isHappClient) {
+      let happSocksUri = '';
+      if (pUser && pPass) {
+        const encodedUserPass = Buffer.from(`${pUser}:${pPass}`, 'utf-8').toString('base64');
+        happSocksUri = `socks://${encodedUserPass}@${host}:${port}#${tag}`;
+      } else {
+        happSocksUri = `socks://${host}:${port}#${tag}`;
+      }
+      return res.status(200).send(`${happSocksUri}\n`);
+    }
+
+    // 5. Standard v2rayNG / V2Box Base64 format
+    const rawAuth = pUser && pPass ? `${pUser}:${pPass}` : ':';
+    const encodedAuth = Buffer.from(rawAuth, 'utf-8').toString('base64');
+    const uri = `socks://${encodedAuth}@${host}:${port}#${tag}`;
     const finalBase64 = Buffer.from(uri, 'utf-8').toString('base64');
 
     return res.status(200).send(finalBase64);
   } catch (err) {
     console.error(`[SUB] Unexpected error for ${username}:`, err);
-    return res.status(200).send('');
+    return res.status(500).send('Server Error');
   }
 }
 
@@ -285,7 +257,6 @@ app.get('/api/sub/:username', handleSubscriptionRequest);
 // ============================================================
 // 2. HAPP ENCRYPTED LINK GENERATOR: GET /happ/:username
 // Calls official https://crypto.happ.su/api-v2.php to produce happ://crypt5/...
-// Once imported in Happ, the user CANNOT view, edit, or share the proxy IP/Port/Credentials.
 // ============================================================
 const HAPP_RSA_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAlBetA0wjbaj+h7oJ/d/h
@@ -337,7 +308,7 @@ async function handleHappEncryptRequest(req, res) {
   }
 
   const cleanUsername = username.trim();
-  const rawSubUrl = `${PUBLIC_API_BASE}/sub/${encodeURIComponent(cleanUsername)}`;
+  const rawSubUrl = `${PUBLIC_API_BASE}/sub/${encodeURIComponent(cleanUsername)}?client=happ`;
 
   try {
     const encryptedLink = await encryptUrlForHapp(rawSubUrl);

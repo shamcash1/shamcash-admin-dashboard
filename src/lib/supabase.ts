@@ -86,7 +86,7 @@ export function getClientPacUrl(username: string): string {
  */
 export async function fetchHappEncryptedLink(username: string): Promise<string> {
   const cleanUsername = username.trim();
-  const targetSubUrl = getClientSubUrl(cleanUsername);
+  const targetSubUrl = `${getClientSubUrl(cleanUsername)}?client=happ`;
 
   // 1. Try local/same-origin API route first (/api/happ/:username)
   try {
