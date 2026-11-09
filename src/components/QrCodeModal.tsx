@@ -9,6 +9,27 @@ interface QrCodeModalProps {
   onClose: () => void;
 }
 
+export function copyToClipboardSync(text: string): boolean {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-9999px';
+    textArea.style.top = '0';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(textArea);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 export const QrCodeModal: React.FC<QrCodeModalProps> = ({
   client,
   encryptedLink,
@@ -24,7 +45,7 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
 
   const handleCopyCode = () => {
     if (!encryptedLink) return;
-    navigator.clipboard.writeText(encryptedLink);
+    copyToClipboardSync(encryptedLink);
     setCopiedCode(true);
     setTimeout(() => setCopiedCode(false), 2000);
   };
@@ -44,7 +65,7 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
       encryptedLink,
     ].join('\n');
 
-    navigator.clipboard.writeText(msg);
+    copyToClipboardSync(msg);
     setCopiedMsg(true);
     setTimeout(() => setCopiedMsg(false), 2200);
   };
@@ -94,6 +115,17 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
               </div>
             )}
           </div>
+
+          {encryptedLink && (
+            <input
+              type="text"
+              readOnly
+              value={encryptedLink}
+              onFocus={(e) => e.target.select()}
+              dir="ltr"
+              className="w-full bg-[#070A10] border border-slate-800 rounded-xl px-3 py-2 text-[11px] font-mono text-emerald-400 select-all focus:outline-none"
+            />
+          )}
 
           <div className="flex items-center justify-between text-xs px-1">
             <span className="text-slate-400">{statusInfo.daysText}</span>

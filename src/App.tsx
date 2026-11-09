@@ -35,7 +35,7 @@ import {
 } from './lib/supabase';
 import { ClientModal } from './components/ClientModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
-import { QrCodeModal } from './components/QrCodeModal';
+import { QrCodeModal, copyToClipboardSync } from './components/QrCodeModal';
 
 const LOCAL_DELTA_STORAGE_KEY = 'shamcash_admin_local_delta_v1';
 
@@ -137,6 +137,19 @@ export default function App() {
     });
   }, [remoteClients, localDelta]);
 
+  // Preload encrypted Happ codes for all clients so mobile clipboard copy is 100% synchronous
+  useEffect(() => {
+    clients.forEach((c) => {
+      if (!happCache[c.username]) {
+        fetchHappEncryptedLink(c.username)
+          .then((enc) => {
+            setHappCache((prev) => (prev[c.username] ? prev : { ...prev, [c.username]: enc }));
+          })
+          .catch(() => {});
+      }
+    });
+  }, [clients, happCache]);
+
   const stats = useMemo(() => {
     let activeCount = 0;
     let expiredCount = 0;
@@ -195,14 +208,14 @@ export default function App() {
 
   // Direct Happ App Link Copy Handlers
   const handleCopyAndroidLink = () => {
-    navigator.clipboard.writeText(HAPP_ANDROID_APK_URL);
+    copyToClipboardSync(HAPP_ANDROID_APK_URL);
     setCopiedAndroidApp(true);
     showToast('تم نسخ رابط تطبيق أندرويد (APK)');
     setTimeout(() => setCopiedAndroidApp(false), 2000);
   };
 
   const handleCopyIosLink = () => {
-    navigator.clipboard.writeText(HAPP_IOS_URL);
+    copyToClipboardSync(HAPP_IOS_URL);
     setCopiedIosApp(true);
     showToast('تم نسخ رابط تطبيق آيفون (App Store)');
     setTimeout(() => setCopiedIosApp(false), 2000);
@@ -246,28 +259,6 @@ export default function App() {
     showToast('تم تحميل ملف النسخة الاحتياطية (CSV)');
   };
 
-  // Copy Encrypted Happ Code
-  const handleCopyHappCode = async (client: ProxyClient) => {
-    try {
-      setEncryptingId(client.id);
-      let encrypted = happCache[client.username];
-      if (!encrypted) {
-        encrypted = await fetchHappEncryptedLink(client.username);
-        setHappCache((prev) => ({ ...prev, [client.username]: encrypted }));
-      }
-      await navigator.clipboard.writeText(encrypted);
-      setCopiedHappId(client.id);
-      showToast(`تم نسخ الكود المشفر · ${client.username}`);
-      setTimeout(() => {
-        setCopiedHappId((prev) => (prev === client.id ? null : prev));
-      }, 2200);
-    } catch {
-      showToast('تعذر توليد الكود المشفر حالياً');
-    } finally {
-      setEncryptingId(null);
-    }
-  };
-
   // Open QR Modal
   const handleOpenQrModal = async (client: ProxyClient) => {
     setQrClient(client);
@@ -290,15 +281,27 @@ export default function App() {
     }
   };
 
-  // Copy Full Customer Message
+  // Copy Encrypted Happ Code (Synchronous on mobile when cached, or opens modal if still loading)
+  const handleCopyHappCode = async (client: ProxyClient) => {
+    const cached = happCache[client.username];
+    if (cached) {
+      copyToClipboardSync(cached);
+      setCopiedHappId(client.id);
+      showToast(`تم نسخ الكود المشفر · ${client.username}`);
+      setTimeout(() => {
+        setCopiedHappId((prev) => (prev === client.id ? null : prev));
+      }, 2200);
+      return;
+    }
+
+    // If not cached yet, open QR modal where user can tap copy synchronously once loaded
+    handleOpenQrModal(client);
+  };
+
+  // Copy Full Customer Message (Synchronous on mobile when cached)
   const handleCopyCustomerMessage = async (client: ProxyClient) => {
-    try {
-      setEncryptingId(client.id);
-      let encrypted = happCache[client.username];
-      if (!encrypted) {
-        encrypted = await fetchHappEncryptedLink(client.username);
-        setHappCache((prev) => ({ ...prev, [client.username]: encrypted }));
-      }
+    const cached = happCache[client.username];
+    if (cached) {
       const statusInfo = getClientStatusInfo(client);
       const message = [
         `🛡️ *VPN ALISHOP*`,
@@ -310,20 +313,19 @@ export default function App() {
         `• أندرويد: ${HAPP_ANDROID_APK_URL}`,
         ``,
         `🔑 *كود التفعيل المشفر:*`,
-        encrypted,
+        cached,
       ].join('\n');
 
-      await navigator.clipboard.writeText(message);
+      copyToClipboardSync(message);
       setCopiedMsgId(client.id);
       showToast(`تم نسخ رسالة التفعيل · ${client.username}`);
       setTimeout(() => {
         setCopiedMsgId((prev) => (prev === client.id ? null : prev));
       }, 2200);
-    } catch {
-      showToast('تعذر تجهيز الرسالة حالياً');
-    } finally {
-      setEncryptingId(null);
+      return;
     }
+
+    handleOpenQrModal(client);
   };
 
   // Save Client
