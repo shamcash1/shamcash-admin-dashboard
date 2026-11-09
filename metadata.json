@@ -1,0 +1,6 @@
+{
+  "name": "Sham Cash Dynamic PAC API",
+  "description": "Dynamic Proxy Auto-Configuration (PAC) API for Sham Cash using Express and Supabase",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
