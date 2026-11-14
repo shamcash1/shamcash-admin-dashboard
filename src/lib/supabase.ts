@@ -20,6 +20,8 @@ export interface ProxyClient {
   proxy_port: number;
   proxy_username?: string | null;
   proxy_password?: string | null;
+  quota_mb?: number;
+  used_mb?: number;
   registered_ip?: string | null;
   created_at?: string;
   updated_at?: string;
@@ -28,13 +30,30 @@ export interface ProxyClient {
 export type ClientComputedStatus = 'active' | 'expired' | 'inactive';
 
 /**
- * Unpacks embedded "user:pass@host" from proxy_host if proxy_username/proxy_password
- * were stored inside proxy_host.
+ * Unpacks embedded "user:pass@host#limit=500&used=12.5" from proxy_host if proxy_username/proxy_password
+ * and quota/usage metadata were stored inside proxy_host.
  */
 export function normalizeProxyClient(raw: ProxyClient): ProxyClient {
   let host = String(raw.proxy_host || '').trim();
   let pUser = raw.proxy_username ? String(raw.proxy_username).trim() : null;
   let pPass = raw.proxy_password ? String(raw.proxy_password).trim() : null;
+  let quotaMb = typeof raw.quota_mb === 'number' ? raw.quota_mb : 500;
+  let usedMb = typeof raw.used_mb === 'number' ? raw.used_mb : 0;
+
+  if (host.includes('#')) {
+    const hashIndex = host.indexOf('#');
+    const hashPart = host.slice(hashIndex + 1);
+    host = host.slice(0, hashIndex).trim();
+    const params = new URLSearchParams(hashPart);
+    if (params.has('limit')) {
+      const parsedLimit = Number(params.get('limit'));
+      if (!Number.isNaN(parsedLimit) && parsedLimit >= 0) quotaMb = parsedLimit;
+    }
+    if (params.has('used')) {
+      const parsedUsed = Number(params.get('used'));
+      if (!Number.isNaN(parsedUsed) && parsedUsed >= 0) usedMb = parsedUsed;
+    }
+  }
 
   if (host.includes('@')) {
     const atIndex = host.lastIndexOf('@');
@@ -52,24 +71,114 @@ export function normalizeProxyClient(raw: ProxyClient): ProxyClient {
     proxy_host: host,
     proxy_username: pUser,
     proxy_password: pPass,
+    quota_mb: quotaMb,
+    used_mb: usedMb,
   };
 }
 
 /**
- * Packs "user:pass@host" into proxy_host when saving to a table without separate auth columns.
+ * Packs "user:pass@host#limit=500&used=12.5" into proxy_host when saving to Supabase.
  */
 export function packProxyHostWithAuth(
   host: string,
   username?: string | null,
-  password?: string | null
+  password?: string | null,
+  quotaMb?: number,
+  usedMb?: number
 ): string {
-  const cleanHost = host.trim().replace(/^.*@/, '');
+  const cleanHost = host
+    .trim()
+    .replace(/#.*$/, '')
+    .replace(/^.*@/, '');
   const u = username ? username.trim() : '';
   const p = password ? password.trim() : '';
-  if (u && p) {
-    return `${u}:${p}@${cleanHost}`;
+  const limitVal = typeof quotaMb === 'number' && !Number.isNaN(quotaMb) ? quotaMb : 500;
+  const usedVal = typeof usedMb === 'number' && !Number.isNaN(usedMb) ? Number(usedMb.toFixed(2)) : 0;
+
+  const base = u && p ? `${u}:${p}@${cleanHost}` : cleanHost;
+  return `${base}#limit=${limitVal}&used=${usedVal}`;
+}
+
+export function formatDataMb(mb: number = 0): string {
+  if (mb <= 0) return '0 MB';
+  if (mb >= 1024) {
+    const gb = mb / 1024;
+    return `${gb % 1 === 0 ? gb.toFixed(0) : gb.toFixed(2)} GB`;
   }
-  return cleanHost;
+  return `${mb % 1 === 0 ? mb.toFixed(0) : mb.toFixed(1)} MB`;
+}
+
+export function parseProxyDetails(client: ProxyClient): {
+  cleanHost: string;
+  subUser: string | null;
+  sessionId: string | null;
+  countryCode: string | null;
+  isNodeMaven: boolean;
+  hasAuth: boolean;
+} {
+  const cleanHost = String(client.proxy_host || '').replace(/#.*$/, '').replace(/^.*@/, '').trim();
+  const rawUser = client.proxy_username ? String(client.proxy_username).trim() : '';
+  const isNodeMaven = cleanHost.toLowerCase().includes('nodemaven');
+  const hasAuth = Boolean(rawUser && client.proxy_password);
+
+  if (!rawUser) {
+    return {
+      cleanHost,
+      subUser: null,
+      sessionId: null,
+      countryCode: null,
+      isNodeMaven,
+      hasAuth,
+    };
+  }
+
+  let subUser = rawUser;
+  let sessionId: string | null = null;
+  let countryCode: string | null = null;
+
+  if (rawUser.includes('-country-')) {
+    subUser = rawUser.split('-country-')[0].trim();
+    const countryMatch = rawUser.match(/-country-([a-zA-Z]{2})/i);
+    if (countryMatch) countryCode = countryMatch[1].toUpperCase();
+    const sidMatch = rawUser.match(/-sid-([a-zA-Z0-9]+)/i);
+    if (sidMatch) sessionId = sidMatch[1].slice(0, 8);
+  }
+
+  return {
+    cleanHost,
+    subUser,
+    sessionId,
+    countryCode,
+    isNodeMaven,
+    hasAuth,
+  };
+}
+
+export function buildCustomerActivationMessage(
+  client: ProxyClient,
+  encryptedLink: string,
+  platform: 'android' | 'ios'
+): string {
+  const statusInfo = getClientStatusInfo(client);
+  const quotaText =
+    client.quota_mb && client.quota_mb > 0 ? formatDataMb(client.quota_mb) : 'مفتوحة (شام كاش)';
+  const appLine =
+    platform === 'android'
+      ? `🤖 *رابط تحميل تطبيق Happ (أندرويد):*\n${HAPP_ANDROID_APK_URL}`
+      : `🍎 *رابط تحميل تطبيق Happ (آيفون - App Store):*\n${HAPP_IOS_URL}`;
+
+  return [
+    `🛡️ *VPN ALISHOP — تفعيل شام كاش*`,
+    `━━━━━━━━━━━━━━━━━━`,
+    `👤 *المشترك:* ${client.username}`,
+    `📦 *الباقة المخصصة:* ${quotaText}`,
+    `📅 *الصلاحية:* ${client.expiry_date} (${statusInfo.daysText})`,
+    ``,
+    appLine,
+    ``,
+    `🔑 *كود التفعيل المشفر (انسخه والصقه داخل التطبيق):*`,
+    encryptedLink,
+  ].join('\n');
 }
 
 export function getClientSubUrl(username: string): string {

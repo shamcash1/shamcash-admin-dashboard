@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
-import { X, Copy, Check, ShieldCheck, Share2 } from 'lucide-react';
-import { ProxyClient, HAPP_IOS_URL, HAPP_ANDROID_APK_URL, getClientStatusInfo } from '../lib/supabase';
+import { X, Copy, Check, ShieldCheck, Smartphone, Download } from 'lucide-react';
+import {
+  ProxyClient,
+  getClientStatusInfo,
+  formatDataMb,
+  buildCustomerActivationMessage,
+} from '../lib/supabase';
 
 interface QrCodeModalProps {
   client: ProxyClient | null;
@@ -37,11 +42,14 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
   onClose,
 }) => {
   const [copiedCode, setCopiedCode] = useState(false);
-  const [copiedMsg, setCopiedMsg] = useState(false);
+  const [copiedAndroidMsg, setCopiedAndroidMsg] = useState(false);
+  const [copiedIosMsg, setCopiedIosMsg] = useState(false);
 
   if (!client) return null;
 
   const statusInfo = getClientStatusInfo(client);
+  const quotaMb = client.quota_mb && client.quota_mb > 0 ? client.quota_mb : 500;
+  const usedMb = client.used_mb && client.used_mb >= 0 ? client.used_mb : 0;
 
   const handleCopyCode = () => {
     if (!encryptedLink) return;
@@ -50,24 +58,17 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
     setTimeout(() => setCopiedCode(false), 2000);
   };
 
-  const handleCopyFullMessage = () => {
+  const handleCopyPlatformMessage = (platform: 'android' | 'ios') => {
     if (!encryptedLink) return;
-    const msg = [
-      `🛡️ *VPN ALISHOP*`,
-      `👤 المشترك: ${client.username}`,
-      `📅 الصلاحية: ${client.expiry_date} (${statusInfo.daysText})`,
-      ``,
-      `📲 *تحميل تطبيق Happ:*`,
-      `• آيفون: ${HAPP_IOS_URL}`,
-      `• أندرويد: ${HAPP_ANDROID_APK_URL}`,
-      ``,
-      `🔑 *كود التفعيل المشفر:*`,
-      encryptedLink,
-    ].join('\n');
-
+    const msg = buildCustomerActivationMessage(client, encryptedLink, platform);
     copyToClipboardSync(msg);
-    setCopiedMsg(true);
-    setTimeout(() => setCopiedMsg(false), 2200);
+    if (platform === 'android') {
+      setCopiedAndroidMsg(true);
+      setTimeout(() => setCopiedAndroidMsg(false), 2200);
+    } else {
+      setCopiedIosMsg(true);
+      setTimeout(() => setCopiedIosMsg(false), 2200);
+    }
   };
 
   const qrImageUrl = encryptedLink
@@ -127,41 +128,78 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
             />
           )}
 
-          <div className="flex items-center justify-between text-xs px-1">
-            <span className="text-slate-400">{statusInfo.daysText}</span>
-            <span className="font-mono tabular-nums text-slate-200" dir="ltr">
-              {client.expiry_date}
-            </span>
+          <div className="bg-[#070A10] border border-slate-800/80 rounded-xl p-3 space-y-1.5 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">{statusInfo.daysText}</span>
+              <span className="font-mono tabular-nums text-slate-200" dir="ltr">
+                {client.expiry_date}
+              </span>
+            </div>
+            <div className="flex items-center justify-between pt-1 border-t border-slate-800/60">
+              <span className="text-slate-400">الباقة المخصصة:</span>
+              <span className="font-mono tabular-nums text-emerald-400 font-semibold" dir="ltr">
+                {formatDataMb(usedMb)} / {formatDataMb(quotaMb)}
+              </span>
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              disabled={loading || !encryptedLink}
-              onClick={handleCopyCode}
-              className={`py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
-                copiedCode
-                  ? 'bg-emerald-950 border-emerald-600 text-emerald-300'
-                  : 'bg-emerald-600 hover:bg-emerald-500 border-emerald-500 text-white'
-              }`}
-            >
-              {copiedCode ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copiedCode ? 'تم النسخ' : 'نسخ الكود'}</span>
-            </button>
+          {/* Copy Encrypted Code Button */}
+          <button
+            type="button"
+            disabled={loading || !encryptedLink}
+            onClick={handleCopyCode}
+            className={`w-full py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
+              copiedCode
+                ? 'bg-emerald-950 border-emerald-600 text-emerald-300'
+                : 'bg-emerald-600 hover:bg-emerald-500 border-emerald-500 text-white'
+            }`}
+          >
+            {copiedCode ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+            <span>{copiedCode ? 'تم نسخ الكود المشفر' : 'نسخ كود Happ المشفر فقط'}</span>
+          </button>
 
-            <button
-              type="button"
-              disabled={loading || !encryptedLink}
-              onClick={handleCopyFullMessage}
-              className={`py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
-                copiedMsg
-                  ? 'bg-sky-950 border-sky-600 text-sky-300'
-                  : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200'
-              }`}
-            >
-              {copiedMsg ? <Check className="w-3.5 h-3.5" /> : <Share2 className="w-3.5 h-3.5" />}
-              <span>{copiedMsg ? 'تم النسخ' : 'نسخ الرسالة'}</span>
-            </button>
+          {/* Platform-Specific Message Buttons */}
+          <div className="space-y-1.5">
+            <div className="text-[11px] text-slate-400 font-medium text-center">
+              نسخ رسالة التفعيل حسب نوع جهاز المشترك:
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={loading || !encryptedLink}
+                onClick={() => handleCopyPlatformMessage('android')}
+                className={`py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
+                  copiedAndroidMsg
+                    ? 'bg-emerald-950 border-emerald-600 text-emerald-300'
+                    : 'bg-[#070A10] hover:bg-slate-800 border-slate-700 text-slate-200'
+                }`}
+              >
+                {copiedAndroidMsg ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                ) : (
+                  <Download className="w-3.5 h-3.5 text-emerald-400" />
+                )}
+                <span>{copiedAndroidMsg ? 'تم نسخ أندرويد' : 'رسالة أندرويد'}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={loading || !encryptedLink}
+                onClick={() => handleCopyPlatformMessage('ios')}
+                className={`py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
+                  copiedIosMsg
+                    ? 'bg-sky-950 border-sky-600 text-sky-300'
+                    : 'bg-[#070A10] hover:bg-slate-800 border-slate-700 text-slate-200'
+                }`}
+              >
+                {copiedIosMsg ? (
+                  <Check className="w-3.5 h-3.5 text-sky-400" />
+                ) : (
+                  <Smartphone className="w-3.5 h-3.5 text-sky-400" />
+                )}
+                <span>{copiedIosMsg ? 'تم نسخ آيفون' : 'رسالة آيفون'}</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>

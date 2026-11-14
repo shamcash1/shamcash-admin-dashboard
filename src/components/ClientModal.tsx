@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, Server, User, AlertCircle, Lock, KeyRound } from 'lucide-react';
+import { X, Calendar, Server, User, AlertCircle, Lock, KeyRound, Database, RotateCcw } from 'lucide-react';
 import { ProxyClient, addDaysToDateString } from '../lib/supabase';
 
 interface ClientModalProps {
@@ -23,8 +23,8 @@ export const ClientModal: React.FC<ClientModalProps> = ({
   mode,
   initialClient,
   existingUsernames,
-  defaultProxyHost = '72.195.34.58',
-  defaultProxyPort = 4145,
+  defaultProxyHost = 'gate.nodemaven.com',
+  defaultProxyPort = 1080,
   defaultProxyUsername = '',
   defaultProxyPassword = '',
   onClose,
@@ -37,6 +37,8 @@ export const ClientModal: React.FC<ClientModalProps> = ({
   const [proxyPort, setProxyPort] = useState<string>(String(defaultProxyPort));
   const [proxyUsername, setProxyUsername] = useState(defaultProxyUsername);
   const [proxyPassword, setProxyPassword] = useState(defaultProxyPassword);
+  const [quotaMb, setQuotaMb] = useState<string>('500');
+  const [usedMb, setUsedMb] = useState<string>('0');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -51,6 +53,8 @@ export const ClientModal: React.FC<ClientModalProps> = ({
       setProxyPort(String(initialClient.proxy_port));
       setProxyUsername(initialClient.proxy_username || '');
       setProxyPassword(initialClient.proxy_password || '');
+      setQuotaMb(String(initialClient.quota_mb ?? 500));
+      setUsedMb(String(initialClient.used_mb ?? 0));
     } else {
       setUsername('');
       setIsActive(true);
@@ -59,6 +63,8 @@ export const ClientModal: React.FC<ClientModalProps> = ({
       setProxyPort(String(defaultProxyPort));
       setProxyUsername(defaultProxyUsername);
       setProxyPassword(defaultProxyPassword);
+      setQuotaMb('500');
+      setUsedMb('0');
     }
   }, [
     isOpen,
@@ -109,7 +115,7 @@ export const ClientModal: React.FC<ClientModalProps> = ({
     }
 
     if (!proxyHost.trim()) {
-      setError('يرجى إدخال عنوان IP البروكسي.');
+      setError('يرجى إدخال عنوان البروكسي.');
       return;
     }
 
@@ -118,6 +124,9 @@ export const ClientModal: React.FC<ClientModalProps> = ({
       setError('منفذ البروكسي غير صالح.');
       return;
     }
+
+    const parsedQuota = Math.max(0, Number(quotaMb) || 0);
+    const parsedUsed = Math.max(0, Number(usedMb) || 0);
 
     setSubmitting(true);
     try {
@@ -130,6 +139,8 @@ export const ClientModal: React.FC<ClientModalProps> = ({
           proxy_port: portNum,
           proxy_username: proxyUsername.trim() ? proxyUsername.trim() : null,
           proxy_password: proxyPassword.trim() ? proxyPassword.trim() : null,
+          quota_mb: parsedQuota,
+          used_mb: parsedUsed,
         },
         initialClient?.id
       );
@@ -147,7 +158,7 @@ export const ClientModal: React.FC<ClientModalProps> = ({
       role="dialog"
       aria-modal="true"
     >
-      <div className="w-full max-w-md bg-[#0E131F] border border-slate-800/90 rounded-2xl shadow-2xl overflow-hidden my-auto">
+      <div className="w-full max-w-lg bg-[#0E131F] border border-slate-800/90 rounded-2xl shadow-2xl overflow-hidden my-auto">
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800/80">
           <h2 className="text-sm font-bold text-white">
             {mode === 'add' ? 'إضافة مشترك جديد' : `تعديل المشترك · ${initialClient?.username}`}
@@ -205,6 +216,82 @@ export const ClientModal: React.FC<ClientModalProps> = ({
             </div>
           </div>
 
+          {/* Data Quota (MB) & Consumed (MB) */}
+          <div className="p-3.5 rounded-xl bg-[#070A10]/90 border border-slate-800/90 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400">
+                <Database className="w-3.5 h-3.5" />
+                <span>مخصصات البيانات والاستهلاك (MB)</span>
+              </div>
+              <div className="flex items-center gap-1 flex-wrap">
+                {[
+                  { label: '100MB', val: '100' },
+                  { label: '250MB', val: '250' },
+                  { label: '500MB', val: '500' },
+                  { label: '1GB', val: '1024' },
+                  { label: '2GB', val: '2048' },
+                ].map((preset) => (
+                  <button
+                    key={preset.val}
+                    type="button"
+                    onClick={() => setQuotaMb(preset.val)}
+                    className={`px-2 py-0.5 text-[11px] font-mono rounded-md border transition-colors ${
+                      quotaMb === preset.val
+                        ? 'bg-emerald-950 border-emerald-600 text-emerald-300'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-medium text-slate-400 mb-1">
+                  الكمية المخصصة (بالميجابايت)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={quotaMb}
+                  onChange={(e) => setQuotaMb(e.target.value)}
+                  placeholder="500"
+                  dir="ltr"
+                  className="w-full bg-[#0E131F] border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-sm font-mono tabular-nums text-white focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-medium text-slate-400">
+                    المصروف حالياً (MB)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setUsedMb('0')}
+                    className="text-[11px] text-sky-400 hover:text-sky-300 inline-flex items-center gap-1"
+                  >
+                    <RotateCcw className="w-2.5 h-2.5" />
+                    <span>تصفير</span>
+                  </button>
+                </div>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={usedMb}
+                  onChange={(e) => setUsedMb(e.target.value)}
+                  placeholder="0"
+                  dir="ltr"
+                  className="w-full bg-[#0E131F] border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-sm font-mono tabular-nums text-white focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
           {/* Expiry Date */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
@@ -243,7 +330,7 @@ export const ClientModal: React.FC<ClientModalProps> = ({
           <div className="grid grid-cols-3 gap-3">
             <div className="col-span-2">
               <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                IP البروكسي
+                عنوان البروكسي (Host / IP)
               </label>
               <div className="relative">
                 <Server className="w-4 h-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -251,7 +338,7 @@ export const ClientModal: React.FC<ClientModalProps> = ({
                   type="text"
                   value={proxyHost}
                   onChange={(e) => setProxyHost(e.target.value)}
-                  placeholder="185.190.140.20"
+                  placeholder="gate.nodemaven.com"
                   dir="ltr"
                   className="w-full bg-[#070A10] border border-slate-800 focus:border-emerald-500 rounded-xl pr-9 pl-3 py-2.5 text-sm font-mono tabular-nums text-white placeholder-slate-600 focus:outline-none transition-colors"
                 />
@@ -266,7 +353,7 @@ export const ClientModal: React.FC<ClientModalProps> = ({
                 max={65535}
                 value={proxyPort}
                 onChange={(e) => setProxyPort(e.target.value)}
-                placeholder="4145"
+                placeholder="1080"
                 dir="ltr"
                 className="w-full bg-[#070A10] border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2.5 text-sm font-mono tabular-nums text-white placeholder-slate-600 focus:outline-none transition-colors"
               />

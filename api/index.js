@@ -24,7 +24,7 @@ app.use((req, res, next) => {
   );
   res.header(
     'Access-Control-Expose-Headers',
-    'profile-title, profile-update-interval, subscription-userinfo, subscription-always-hwid-enable, content-disposition'
+    'profile-title, profile-update-interval, subscription-userinfo, subscription-always-hwid-enable, routing-enable, exclude-routes, exclude-routes-set, no-limit-enabled, content-disposition'
   );
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
@@ -162,44 +162,232 @@ async function verifyAndBindClient(username, callerIp, callerHwid = '') {
   return { allowed: false, reason: 'ip_mismatch', client: data };
 }
 
+// Helper to unpack user:pass@host#limit=500&used=12.5 from proxy_host
+function parseStoredProxyHost(rawProxyHost, fallbackUser = '', fallbackPass = '') {
+  let raw = String(rawProxyHost || '').trim();
+  let quotaMb = 500; // Default 500 MB allocation if not specified
+  let usedMb = 0;
+
+  if (raw.includes('#')) {
+    const hashIndex = raw.indexOf('#');
+    const hashPart = raw.slice(hashIndex + 1);
+    raw = raw.slice(0, hashIndex).trim();
+    const params = new URLSearchParams(hashPart);
+    if (params.has('limit')) {
+      const parsedLimit = Number(params.get('limit'));
+      if (!Number.isNaN(parsedLimit) && parsedLimit >= 0) quotaMb = parsedLimit;
+    }
+    if (params.has('used')) {
+      const parsedUsed = Number(params.get('used'));
+      if (!Number.isNaN(parsedUsed) && parsedUsed >= 0) usedMb = parsedUsed;
+    }
+  }
+
+  let host = raw;
+  let pUser = fallbackUser ? String(fallbackUser).trim() : '';
+  let pPass = fallbackPass ? String(fallbackPass).trim() : '';
+
+  if (host.includes('@')) {
+    const atIndex = host.lastIndexOf('@');
+    const authPart = host.slice(0, atIndex);
+    host = host.slice(atIndex + 1).trim();
+    if (!pUser && authPart.includes(':')) {
+      const colonIndex = authPart.indexOf(':');
+      pUser = authPart.slice(0, colonIndex).trim();
+      pPass = authPart.slice(colonIndex + 1).trim();
+    }
+  }
+
+  if (pUser === 'Lishopsbl3') {
+    pUser = 'LishopsbI3';
+  }
+
+  // Extract NodeMaven sub-user prefix (e.g. "Alishoop2" from "Alishoop2-country-sy-sid-...")
+  const subUserPrefix = pUser.includes('-country-')
+    ? pUser.split('-country-')[0].trim()
+    : pUser.trim();
+
+  return { host, pUser, pPass, quotaMb, usedMb, subUserPrefix };
+}
+
+// Optional NodeMaven live sub-user usage fetcher (when NODEMAVEN_API_KEY is configured in env)
+async function fetchNodeMavenSubUsersMap() {
+  const apiKey = process.env.NODEMAVEN_API_KEY || '';
+  if (!apiKey) return null;
+
+  try {
+    const res = await fetch('https://api.nodemaven.com/api/v2/base/sub-users/', {
+      method: 'GET',
+      headers: {
+        Authorization: `x-api-key ${apiKey}`,
+        Accept: 'application/json',
+      },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const list = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.results)
+        ? data.results
+        : Array.isArray(data?.data)
+          ? data.data
+          : [];
+    const map = {};
+    for (const item of list) {
+      const u = String(item.proxy_username || item.username || '').trim().toLowerCase();
+      if (u) {
+        map[u] = {
+          id: item.id,
+          proxy_username: item.proxy_username || item.username,
+          traffic_limit_bytes: Number(item.traffic_limit ?? 0),
+          traffic_used_bytes: Number(item.used_traffic ?? item.traffic_used ?? 0),
+          is_traffic_limited: Boolean(item.is_traffic_limited),
+        };
+      }
+    }
+    return map;
+  } catch (err) {
+    console.error('[NODEMAVEN] Error fetching sub-users:', err);
+    return null;
+  }
+}
+
 // ============================================================
 // 1. SUBSCRIPTION ENDPOINT: GET /sub/:username
-// Compatible with Happ (Plain/Base64 + HWID Lock) & v2rayNG / V2Box
+// Compatible with Happ (Xray JSON + HWID Lock + Instant Pause) & v2rayNG / V2Box
 // ============================================================
 async function handleSubscriptionRequest(req, res) {
   const { username } = req.params;
   const callerIp = getCallerIp(req);
   const callerHwid = getCallerHwid(req);
   const ua = String(req.headers['user-agent'] || '').toLowerCase();
+  const isHappClient = ua.includes('happ') || Boolean(callerHwid) || req.query?.client === 'happ';
 
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
 
+  const excludedDnsAndLanRoutes =
+    '1.1.1.1/32, 1.0.0.1/32, 8.8.8.8/32, 8.8.4.4/32, 9.9.9.9/32, 149.112.112.112/32, 208.67.222.222/32, 208.67.220.220/32, 192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12';
+
+  // Always enforce auto-update on app open & every 1 hour so pausing/stopping a client takes effect automatically
+  res.setHeader('profile-update-interval', '1');
+  res.setHeader('subscription-auto-update-enable', '1');
+  res.setHeader('subscription-auto-update-open-enable', '1');
+  res.setHeader('subscriptions-expand-now', '1');
+  res.setHeader('subscription-always-hwid-enable', '1');
+  res.setHeader('subscription-ping-onopen-enabled', '0');
+  res.setHeader('hide-settings', '1');
+  res.setHeader('routing-enable', '0');
+  res.setHeader('exclude-routes-set', excludedDnsAndLanRoutes);
+  res.setHeader('exclude-routes', excludedDnsAndLanRoutes);
+  res.setHeader('no-limit-enabled', '1');
+
   try {
     const result = await verifyAndBindClient(username, callerIp, callerHwid);
-
-    if (!result.allowed || !result.client) {
-      return res.status(403).send('Subscription inactive, expired, or locked to another device.');
-    }
-
     const clientData = result.client;
+    const cleanTitleName = clientData?.username || username || 'User';
+    const profileTitlePlain = `VPN Alishop - ${cleanTitleName}`.slice(0, 25);
+    const profileTitleBase64 = Buffer.from(profileTitlePlain, 'utf-8').toString('base64');
+    res.setHeader('profile-title', `base64:${profileTitleBase64}`);
 
-    // 1. Extract proxy details from Supabase (supports both separate columns and user:pass@host in proxy_host)
-    let host = String(clientData.proxy_host).trim();
-    const port = Number(clientData.proxy_port);
-    let pUser = clientData.proxy_username ? String(clientData.proxy_username).trim() : '';
-    let pPass = clientData.proxy_password ? String(clientData.proxy_password).trim() : '';
+    // Unpack proxy details and quota/usage metadata
+    const parsedProxy = clientData
+      ? parseStoredProxyHost(
+          clientData.proxy_host,
+          clientData.proxy_username,
+          clientData.proxy_password
+        )
+      : { host: '', pUser: '', pPass: '', quotaMb: 500, usedMb: 0, subUserPrefix: '' };
 
-    if (host.includes('@')) {
-      const atIndex = host.lastIndexOf('@');
-      const authPart = host.slice(0, atIndex);
-      host = host.slice(atIndex + 1).trim();
-      if (!pUser && authPart.includes(':')) {
-        const colonIndex = authPart.indexOf(':');
-        pUser = authPart.slice(0, colonIndex).trim();
-        pPass = authPart.slice(colonIndex + 1).trim();
+    let { host, pUser, pPass, quotaMb, usedMb, subUserPrefix } = parsedProxy;
+
+    // Optional live sync with NodeMaven API if NODEMAVEN_API_KEY is configured
+    if (subUserPrefix && process.env.NODEMAVEN_API_KEY) {
+      const nmMap = await fetchNodeMavenSubUsersMap();
+      const nmEntry = nmMap ? nmMap[subUserPrefix.toLowerCase()] : null;
+      if (nmEntry) {
+        if (nmEntry.traffic_limit_bytes > 0) {
+          quotaMb = Number((nmEntry.traffic_limit_bytes / (1024 * 1024)).toFixed(2));
+        }
+        usedMb = Number((nmEntry.traffic_used_bytes / (1024 * 1024)).toFixed(2));
       }
     }
+
+    const limitBytes = quotaMb > 0 ? Math.round(quotaMb * 1024 * 1024) : 107374182400;
+    const usedBytes = Math.min(limitBytes, Math.max(0, Math.round(usedMb * 1024 * 1024)));
+    const isQuotaExhausted = quotaMb > 0 && usedMb >= quotaMb;
+
+    // CRITICAL FIX FOR PAUSE / EXPIRY / DEVICE LOCK / QUOTA EXHAUSTED:
+    // Never return HTTP 403 to Happ! When Happ receives HTTP 403, it ignores the response and keeps
+    // the previously cached proxy server working!
+    // Instead, return HTTP 200 OK with a "blackhole" Xray JSON configuration that overwrites and
+    // deletes the proxy credentials from the phone immediately.
+    if (!result.allowed || !clientData || isQuotaExhausted) {
+      let stopReasonAr = '⛔ تم إيقاف الاشتراك مؤقتاً - تواصل مع الإدارة';
+      if (isQuotaExhausted) {
+        stopReasonAr = `⛔ انتهت الباقة المخصصة (${quotaMb} MB) - يرجى التجديد`;
+      } else if (result.reason === 'hwid_mismatch' || result.reason === 'ip_mismatch') {
+        stopReasonAr = '⛔ الحساب مقفل على جهاز آخر';
+      } else if (result.reason === 'inactive_or_expired' && clientData) {
+        const isAct = clientData.is_active === true || clientData.is_active === 'true';
+        stopReasonAr = isAct
+          ? '⛔ انتهت صلاحية الاشتراك - يرجى التجديد'
+          : '⛔ الاشتراك متوقف من قبل الإدارة';
+      }
+
+      const announceBase64 = Buffer.from(stopReasonAr, 'utf-8').toString('base64');
+      res.setHeader('announce', `base64:${announceBase64}`);
+      res.setHeader(
+        'subscription-userinfo',
+        `upload=0; download=${limitBytes}; total=${limitBytes}; expire=1000000000`
+      );
+
+      if (isHappClient) {
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        const disabledConfig = {
+          remarks: `⛔ متوقف - ${cleanTitleName}`,
+          meta: {
+            serverDescription: stopReasonAr,
+          },
+          log: {
+            loglevel: 'none',
+          },
+          inbounds: [
+            {
+              tag: 'socks',
+              port: 10808,
+              listen: '127.0.0.1',
+              protocol: 'socks',
+              settings: { auth: 'noauth', udp: false },
+            },
+          ],
+          outbounds: [
+            {
+              tag: 'block',
+              protocol: 'blackhole',
+              settings: { response: { type: 'none' } },
+            },
+          ],
+          routing: {
+            domainStrategy: 'AsIs',
+            rules: [
+              {
+                type: 'field',
+                network: 'tcp,udp',
+                outboundTag: 'block',
+              },
+            ],
+          },
+        };
+        return res.status(200).send(JSON.stringify([disabledConfig], null, 2));
+      }
+
+      const disabledTag = encodeURIComponent(stopReasonAr);
+      const disabledUri = `socks://0.0.0.0:1#${disabledTag}`;
+      return res.status(200).send(Buffer.from(disabledUri, 'utf-8').toString('base64'));
+    }
+
+    const port = Number(clientData.proxy_port);
 
     // 2. Compute expiry timestamp in Unix seconds for Happ / subscription header
     const expiryDateObj = new Date(clientData.expiry_date);
@@ -208,34 +396,171 @@ async function handleSubscriptionRequest(req, res) {
     }
     const expireUnix = Math.floor(expiryDateObj.getTime() / 1000);
 
-    // 3. Set Official Happ App Management & Subscription Headers
-    const profileTitlePlain = `VPN Alishop - ${clientData.username}`.slice(0, 25);
-    const profileTitleBase64 = Buffer.from(profileTitlePlain, 'utf-8').toString('base64');
-
-    res.setHeader('profile-title', `base64:${profileTitleBase64}`);
-    res.setHeader('profile-update-interval', '1');
-    res.setHeader('subscription-always-hwid-enable', '1');
     res.setHeader(
       'subscription-userinfo',
-      `upload=0; download=0; total=107374182400; expire=${expireUnix}`
+      `upload=0; download=${usedBytes}; total=${limitBytes}; expire=${expireUnix}`
     );
 
     const tag = encodeURIComponent(`VPN Alishop - ${clientData.username}`);
 
-    // 4. If requested by Happ (or with HWID header), return Happ's native plain-text subscription format
-    // Per https://www.happ.su/main/dev-docs/examples-of-links-and-parameters.md:
-    // Plain text: socks://user:pass@1.2.3.4:443#Name or Partial Base64: socks://<base64_user_pass>@1.2.3.4:443#Name
-    const isHappClient = ua.includes('happ') || Boolean(callerHwid) || req.query?.client === 'happ';
-
+    // 4. If requested by Happ (or with HWID header), return a complete Xray JSON Array configuration
+    // with ULTRA-LOW BANDWIDTH SPLIT-TUNNELING:
+    // - ONLY Sham Cash API domains (*.shamcash.sy, *.shamcash.org) are routed through "proxy".
+    // - Heavy APK downloads (download.shamcash.sy) and ALL other apps/system services (Google Play,
+    //   Firebase, YouTube, WhatsApp, OS background sync) are routed to "direct" (0 proxy bandwidth used!).
+    // - "routeOnly": false + "domainStrategy": "AsIs" ensures TLS SNI domain names are sent to the proxy.
     if (isHappClient) {
-      let happSocksUri = '';
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+
+      const socksServer = {
+        address: host,
+        port: port,
+      };
       if (pUser && pPass) {
-        const encodedUserPass = Buffer.from(`${pUser}:${pPass}`, 'utf-8').toString('base64');
-        happSocksUri = `socks://${encodedUserPass}@${host}:${port}#${tag}`;
-      } else {
-        happSocksUri = `socks://${host}:${port}#${tag}`;
+        socksServer.users = [
+          {
+            user: pUser,
+            pass: pPass,
+            level: 8,
+          },
+        ];
       }
-      return res.status(200).send(`${happSocksUri}\n`);
+
+      const remainingMb = Math.max(0, Number((quotaMb - usedMb).toFixed(1)));
+      const descriptionText =
+        quotaMb > 0
+          ? `شام كاش فقط · متبقي ${remainingMb}MB من ${quotaMb}MB`
+          : 'ShamCash Only (Ultra-Low Data)';
+
+      const xrayConfig = {
+        remarks: `VPN Alishop - ${clientData.username}`,
+        meta: {
+          serverDescription: descriptionText.slice(0, 30),
+        },
+        log: {
+          loglevel: 'warning',
+        },
+        dns: {
+          hosts: {
+            'cloudflare-dns.com': '1.1.1.1',
+            'dns.google': '8.8.8.8',
+          },
+          servers: ['1.1.1.1', '8.8.8.8'],
+        },
+        inbounds: [
+          {
+            tag: 'socks',
+            port: 10808,
+            listen: '127.0.0.1',
+            protocol: 'socks',
+            settings: {
+              auth: 'noauth',
+              udp: true,
+              userLevel: 8,
+            },
+            sniffing: {
+              enabled: true,
+              destOverride: ['http', 'tls'],
+              routeOnly: false,
+            },
+          },
+          {
+            tag: 'http',
+            port: 10809,
+            listen: '127.0.0.1',
+            protocol: 'http',
+            settings: {
+              userLevel: 8,
+            },
+            sniffing: {
+              enabled: true,
+              destOverride: ['http', 'tls'],
+              routeOnly: false,
+            },
+          },
+        ],
+        outbounds: [
+          {
+            tag: 'direct',
+            protocol: 'freedom',
+            settings: {},
+          },
+          {
+            tag: 'proxy',
+            protocol: 'socks',
+            settings: {
+              servers: [socksServer],
+            },
+            streamSettings: {
+              network: 'tcp',
+            },
+          },
+          {
+            tag: 'block',
+            protocol: 'blackhole',
+            settings: {
+              response: {
+                type: 'none',
+              },
+            },
+          },
+        ],
+        routing: {
+          domainStrategy: 'AsIs',
+          rules: [
+            {
+              type: 'field',
+              port: 53,
+              outboundTag: 'direct',
+            },
+            {
+              type: 'field',
+              network: 'udp',
+              outboundTag: 'block',
+            },
+            {
+              type: 'field',
+              domain: [
+                'full:download.shamcash.sy',
+                'domain:googleapis.com',
+                'domain:gstatic.com',
+                'domain:google.com',
+                'domain:firebaseio.com',
+                'domain:crashlytics.com',
+                'domain:slsandbox.tech',
+              ],
+              outboundTag: 'direct',
+            },
+            {
+              type: 'field',
+              domain: [
+                'domain:api.shamcash.sy',
+                'domain:api-02.shamcash.sy',
+                'domain:api-03.shamcash.sy',
+                'domain:bank.shamcash.sy',
+                'domain:payment.shamcash.sy',
+                'domain:support.shamcash.sy',
+                'domain:deeplink.shamcash.sy',
+                'domain:shamcash.sy',
+                'domain:shamcash.org',
+              ],
+              outboundTag: 'proxy',
+            },
+            {
+              type: 'field',
+              ip: ['191.44.71.71/32', '94.252.183.88/32'],
+              outboundTag: 'proxy',
+            },
+            {
+              type: 'field',
+              network: 'tcp,udp',
+              outboundTag: 'direct',
+            },
+          ],
+        },
+      };
+
+      return res.status(200).send(JSON.stringify([xrayConfig], null, 2));
     }
 
     // 5. Standard v2rayNG / V2Box Base64 format
@@ -253,6 +578,15 @@ async function handleSubscriptionRequest(req, res) {
 
 app.get('/sub/:username', handleSubscriptionRequest);
 app.get('/api/sub/:username', handleSubscriptionRequest);
+
+// Optional NodeMaven Live Traffic Sync Endpoint for Admin Dashboard
+app.get('/api/nodemaven/usage', async (_req, res) => {
+  const map = await fetchNodeMavenSubUsersMap();
+  return res.json({
+    connected: Boolean(map),
+    sub_users: map || {},
+  });
+});
 
 // ============================================================
 // 2. HAPP ENCRYPTED LINK GENERATOR: GET /happ/:username

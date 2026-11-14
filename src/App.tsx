@@ -11,6 +11,7 @@ import {
   Clock,
   PauseCircle,
   Power,
+  Calendar,
   CalendarPlus,
   RotateCcw,
   Lock,
@@ -20,6 +21,11 @@ import {
   Download,
   FileDown,
   Smartphone,
+  Server,
+  HardDrive,
+  SlidersHorizontal,
+  X,
+  Fingerprint,
 } from 'lucide-react';
 import {
   supabase,
@@ -30,6 +36,9 @@ import {
   fetchHappEncryptedLink,
   normalizeProxyClient,
   packProxyHostWithAuth,
+  formatDataMb,
+  parseProxyDetails,
+  buildCustomerActivationMessage,
   HAPP_IOS_URL,
   HAPP_ANDROID_APK_URL,
 } from './lib/supabase';
@@ -75,7 +84,6 @@ export default function App() {
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const [copiedAndroidApp, setCopiedAndroidApp] = useState<boolean>(false);
   const [copiedIosApp, setCopiedIosApp] = useState<boolean>(false);
-  const [encryptingId, setEncryptingId] = useState<string | null>(null);
   const [happCache, setHappCache] = useState<Record<string, string>>({});
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -88,6 +96,15 @@ export default function App() {
   const [qrEncryptedLink, setQrEncryptedLink] = useState<string | null>(null);
   const [qrLoading, setQrLoading] = useState<boolean>(false);
 
+  // Platform choice modal when clicking "الرسالة"
+  const [messagePlatformClient, setMessagePlatformClient] = useState<ProxyClient | null>(null);
+
+  // Quick Quota & Usage adjustment modal
+  const [quotaEditClient, setQuotaEditClient] = useState<ProxyClient | null>(null);
+  const [quickQuotaMb, setQuickQuotaMb] = useState<string>('500');
+  const [quickUsedMb, setQuickUsedMb] = useState<string>('0');
+  const [savingQuota, setSavingQuota] = useState<boolean>(false);
+
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
     setTimeout(() => {
@@ -95,24 +112,67 @@ export default function App() {
     }, 2800);
   }, []);
 
-  const fetchClients = useCallback(async (isSilent = false) => {
-    if (!isSilent) setLoading(true);
-    setRefreshing(true);
-
+  const syncNodeMavenUsage = useCallback(async (loadedClients: ProxyClient[]) => {
     try {
-      const { data, error } = await supabase
-        .from('proxy_clients')
-        .select('*')
-        .order('created_at', { ascending: false });
+      const res = await fetch('/api/nodemaven/usage', { method: 'GET' });
+      if (!res.ok) return;
+      const json = await res.json();
+      if (!json?.synced || !json?.subUsers) return;
 
-      if (!error && data) {
-        setRemoteClients((data as ProxyClient[]).map(normalizeProxyClient));
-      }
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+      const subUsersMap = json.subUsers as Record<
+        string,
+        { trafficLimitMb: number | null; trafficUsedMb: number | null }
+      >;
+
+      setRemoteClients((prev) =>
+        (prev.length > 0 ? prev : loadedClients).map((c) => {
+          const subPrefix = String(c.proxy_username || '')
+            .split('-country-')[0]
+            .trim()
+            .toLowerCase();
+          const match = subPrefix ? subUsersMap[subPrefix] : undefined;
+          if (!match) return c;
+          return {
+            ...c,
+            quota_mb:
+              match.trafficLimitMb !== null && match.trafficLimitMb > 0
+                ? match.trafficLimitMb
+                : c.quota_mb,
+            used_mb:
+              match.trafficUsedMb !== null && match.trafficUsedMb >= 0
+                ? match.trafficUsedMb
+                : c.used_mb,
+          };
+        })
+      );
+    } catch {
+      // Optional sync if NODEMAVEN_API_KEY is configured on server
     }
   }, []);
+
+  const fetchClients = useCallback(
+    async (isSilent = false) => {
+      if (!isSilent) setLoading(true);
+      setRefreshing(true);
+
+      try {
+        const { data, error } = await supabase
+          .from('proxy_clients')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (!error && data) {
+          const normalized = (data as ProxyClient[]).map(normalizeProxyClient);
+          setRemoteClients(normalized);
+          syncNodeMavenUsage(normalized);
+        }
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [syncNodeMavenUsage]
+  );
 
   useEffect(() => {
     fetchClients();
@@ -232,6 +292,8 @@ export default function App() {
       'proxy_port',
       'proxy_username',
       'proxy_password',
+      'quota_mb',
+      'used_mb',
       'registered_ip',
     ];
     const rows = clients.map((c) =>
@@ -243,6 +305,8 @@ export default function App() {
         c.proxy_port,
         c.proxy_username || '',
         c.proxy_password || '',
+        c.quota_mb ?? 500,
+        c.used_mb ?? 0,
         c.registered_ip || '',
       ]
         .map((v) => `"${String(v).replace(/"/g, '""')}"`)
@@ -281,7 +345,7 @@ export default function App() {
     }
   };
 
-  // Copy Encrypted Happ Code (Synchronous on mobile when cached, or opens modal if still loading)
+  // Copy Encrypted Happ Code
   const handleCopyHappCode = async (client: ProxyClient) => {
     const cached = happCache[client.username];
     if (cached) {
@@ -294,41 +358,113 @@ export default function App() {
       return;
     }
 
-    // If not cached yet, open QR modal where user can tap copy synchronously once loaded
     handleOpenQrModal(client);
   };
 
-  // Copy Full Customer Message (Synchronous on mobile when cached)
-  const handleCopyCustomerMessage = async (client: ProxyClient) => {
-    const cached = happCache[client.username];
-    if (cached) {
-      const statusInfo = getClientStatusInfo(client);
-      const message = [
-        `🛡️ *VPN ALISHOP*`,
-        `👤 المشترك: ${client.username}`,
-        `📅 الصلاحية: ${client.expiry_date} (${statusInfo.daysText})`,
-        ``,
-        `📲 *تحميل تطبيق Happ:*`,
-        `• آيفون: ${HAPP_IOS_URL}`,
-        `• أندرويد: ${HAPP_ANDROID_APK_URL}`,
-        ``,
-        `🔑 *كود التفعيل المشفر:*`,
-        cached,
-      ].join('\n');
+  // Open Platform Selector Modal when clicking "الرسالة"
+  const handleRequestCustomerMessage = (client: ProxyClient) => {
+    if (!happCache[client.username]) {
+      fetchHappEncryptedLink(client.username)
+        .then((enc) => {
+          setHappCache((prev) => ({ ...prev, [client.username]: enc }));
+        })
+        .catch(() => {});
+    }
+    setMessagePlatformClient(client);
+  };
 
-      copyToClipboardSync(message);
-      setCopiedMsgId(client.id);
-      showToast(`تم نسخ رسالة التفعيل · ${client.username}`);
-      setTimeout(() => {
-        setCopiedMsgId((prev) => (prev === client.id ? null : prev));
-      }, 2200);
+  // Copy Platform-Specific Customer Message (Android OR iOS only)
+  const handleConfirmCopyPlatformMessage = (platform: 'android' | 'ios') => {
+    if (!messagePlatformClient) return;
+    const client = messagePlatformClient;
+    const cached = happCache[client.username];
+
+    if (!cached) {
+      setMessagePlatformClient(null);
+      handleOpenQrModal(client);
       return;
     }
 
-    handleOpenQrModal(client);
+    const message = buildCustomerActivationMessage(client, cached, platform);
+    copyToClipboardSync(message);
+    setCopiedMsgId(client.id);
+    setMessagePlatformClient(null);
+    showToast(
+      platform === 'android'
+        ? `تم نسخ رسالة أندرويد فقط · ${client.username}`
+        : `تم نسخ رسالة آيفون فقط · ${client.username}`
+    );
+    setTimeout(() => {
+      setCopiedMsgId((prev) => (prev === client.id ? null : prev));
+    }, 2200);
   };
 
-  // Save Client
+  // Open Quick Quota Modal
+  const handleOpenQuotaModal = (client: ProxyClient) => {
+    setQuotaEditClient(client);
+    setQuickQuotaMb(String(client.quota_mb && client.quota_mb > 0 ? client.quota_mb : 500));
+    setQuickUsedMb(String(client.used_mb && client.used_mb >= 0 ? client.used_mb : 0));
+  };
+
+  // Update Quota & Used MB directly
+  const handleUpdateClientQuota = async (
+    client: ProxyClient,
+    newQuotaMb: number,
+    newUsedMb: number
+  ) => {
+    setSavingQuota(true);
+    try {
+      const safeQuota = Math.max(1, Math.round(newQuotaMb));
+      const safeUsed = Math.max(0, Number(newUsedMb.toFixed(2)));
+      const packedHost = packProxyHostWithAuth(
+        client.proxy_host,
+        client.proxy_username,
+        client.proxy_password,
+        safeQuota,
+        safeUsed
+      );
+
+      const { data, error } = await supabase
+        .from('proxy_clients')
+        .update({
+          proxy_host: packedHost,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', client.id)
+        .select();
+
+      if (!error && data && data.length > 0) {
+        const updated = normalizeProxyClient(data[0] as ProxyClient);
+        setRemoteClients((prev) => prev.map((c) => (c.id === client.id ? updated : c)));
+        showToast(
+          `تم تحديث باقة ${client.username} (${formatDataMb(safeUsed)} / ${formatDataMb(safeQuota)})`
+        );
+        setQuotaEditClient(null);
+        return;
+      }
+
+      const updatedFallback: ProxyClient = {
+        ...client,
+        quota_mb: safeQuota,
+        used_mb: safeUsed,
+        updated_at: new Date().toISOString(),
+      };
+      const nextDelta: LocalDeltaState = {
+        ...localDelta,
+        upserted: { ...localDelta.upserted, [client.id]: updatedFallback },
+      };
+      setLocalDelta(nextDelta);
+      saveLocalDelta(nextDelta);
+      showToast(
+        `تم تحديث باقة ${client.username} (${formatDataMb(safeUsed)} / ${formatDataMb(safeQuota)})`
+      );
+      setQuotaEditClient(null);
+    } finally {
+      setSavingQuota(false);
+    }
+  };
+
+  // Save Client (Add / Edit Modal)
   const handleSaveClient = async (
     clientData: Omit<ProxyClient, 'id' | 'created_at' | 'updated_at'>,
     id?: string
@@ -336,7 +472,9 @@ export default function App() {
     const packedHost = packProxyHostWithAuth(
       clientData.proxy_host,
       clientData.proxy_username,
-      clientData.proxy_password
+      clientData.proxy_password,
+      clientData.quota_mb,
+      clientData.used_mb
     );
     const dbPayload = {
       username: clientData.username,
@@ -459,7 +597,11 @@ export default function App() {
     if (!error && data && data.length > 0) {
       const updated = normalizeProxyClient(data[0] as ProxyClient);
       setRemoteClients((prev) => prev.map((c) => (c.id === client.id ? updated : c)));
-      showToast(nextActive ? `تم تفعيل ${client.username}` : `تم إيقاف ${client.username}`);
+      showToast(
+        nextActive
+          ? `تم تفعيل اشتراك ${client.username}`
+          : `تم إيقاف اشتراك ${client.username} فوراً داخل Happ`
+      );
       return;
     }
 
@@ -474,7 +616,11 @@ export default function App() {
     };
     setLocalDelta(nextDelta);
     saveLocalDelta(nextDelta);
-    showToast(nextActive ? `تم تفعيل ${client.username}` : `تم إيقاف ${client.username}`);
+    showToast(
+      nextActive
+        ? `تم تفعيل اشتراك ${client.username}`
+        : `تم إيقاف اشتراك ${client.username} فوراً داخل Happ`
+    );
   };
 
   // Quick +30 days
@@ -549,8 +695,8 @@ export default function App() {
     setModalOpen(true);
   };
 
-  const defaultHost = clients[0]?.proxy_host || '72.195.34.58';
-  const defaultPort = clients[0]?.proxy_port || 4145;
+  const defaultHost = clients[0]?.proxy_host || 'gate.nodemaven.com';
+  const defaultPort = clients[0]?.proxy_port || 1080;
 
   return (
     <div className="min-h-screen bg-[#070A10] text-slate-100 flex flex-col" dir="rtl">
@@ -651,7 +797,7 @@ export default function App() {
               onClick={() => fetchClients(true)}
               disabled={refreshing}
               className="p-1.5 rounded-lg bg-[#0E131F] hover:bg-slate-800/80 border border-slate-800 text-slate-400 hover:text-white transition-colors"
-              title="تحديث"
+              title="تحديث البيانات"
             >
               <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin text-emerald-400' : ''}`} />
             </button>
@@ -783,7 +929,7 @@ export default function App() {
             {[1, 2, 3, 4].map((n) => (
               <div
                 key={n}
-                className="h-12 bg-slate-800/40 animate-pulse rounded-xl border border-slate-800/60"
+                className="h-16 bg-slate-800/40 animate-pulse rounded-xl border border-slate-800/60"
               />
             ))}
           </div>
@@ -820,222 +966,380 @@ export default function App() {
           </div>
         ) : (
           <>
-            {/* DESKTOP TABLE: Clean 6-Column Layout */}
-            <div className="hidden md:block bg-[#0E131F] border border-slate-800/80 rounded-2xl overflow-hidden">
+            {/* DESKTOP TABLE: Professional SaaS Layout with Data Allocation Bar Under Each User */}
+            <div className="hidden md:block bg-[#0E131F] border border-slate-800/80 rounded-2xl overflow-hidden shadow-xl">
               <div className="overflow-x-auto">
                 <table className="w-full text-right border-collapse">
                   <thead>
-                    <tr className="border-b border-slate-800/80 bg-[#070A10]/60 text-xs font-medium text-slate-400">
-                      <th className="py-3.5 px-5 whitespace-nowrap">المشترك</th>
+                    <tr className="border-b border-slate-800/90 bg-[#070A10]/80 text-xs font-semibold text-slate-400">
+                      <th className="py-3.5 px-5 whitespace-nowrap">المشترك والباقة</th>
                       <th className="py-3.5 px-4 whitespace-nowrap">الحالة</th>
                       <th className="py-3.5 px-4 whitespace-nowrap">تاريخ الانتهاء</th>
-                      <th className="py-3.5 px-4 whitespace-nowrap">البروكسي</th>
-                      <th className="py-3.5 px-4 whitespace-nowrap">الجهاز</th>
+                      <th className="py-3.5 px-4 whitespace-nowrap">البروكسي والخادم</th>
+                      <th className="py-3.5 px-4 whitespace-nowrap">حماية الجهاز</th>
                       <th className="py-3.5 px-5 text-left whitespace-nowrap">التفعيل والإدارة</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-800/60 text-sm">
+                  <tbody className="divide-y divide-slate-800/70 text-sm">
                     {filteredClients.map((client) => {
                       const statusInfo = getClientStatusInfo(client);
                       const isHappCopied = copiedHappId === client.id;
                       const isMsgCopied = copiedMsgId === client.id;
-                      const isEncrypting = encryptingId === client.id;
                       const boundDevice = client.registered_ip ? client.registered_ip.trim() : null;
+                      const proxyDetails = parseProxyDetails(client);
+
+                      const quotaMb = client.quota_mb && client.quota_mb > 0 ? client.quota_mb : 500;
+                      const usedMb = client.used_mb && client.used_mb >= 0 ? client.used_mb : 0;
+                      const remainingMb = Math.max(0, Number((quotaMb - usedMb).toFixed(1)));
+                      const usagePct = Math.min(100, Math.round((usedMb / quotaMb) * 100));
+                      const isQuotaExhausted = usedMb >= quotaMb;
+
+                      const rawHwid = boundDevice
+                        ? boundDevice.replace(/^HWID:/i, '').trim()
+                        : '';
+                      const shortHwid =
+                        rawHwid.length > 12
+                          ? `${rawHwid.slice(0, 6)}...${rawHwid.slice(-4)}`
+                          : rawHwid;
 
                       return (
-                        <tr
-                          key={client.id}
-                          className="hover:bg-slate-800/30 transition-colors"
-                        >
-                          {/* 1. Subscriber */}
-                          <td className="py-3.5 px-5 whitespace-nowrap">
-                            <span className="font-mono font-semibold text-white" dir="ltr">
-                              {client.username}
-                            </span>
-                          </td>
+                        <React.Fragment key={client.id}>
+                          <tr className="hover:bg-slate-800/25 transition-colors">
+                            {/* 1. Subscriber + Underneath Quota & Usage Progress */}
+                            <td className="py-4 px-5 align-top min-w-[260px]">
+                              <div className="space-y-2.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span
+                                    className="font-mono font-bold text-base text-white tracking-tight"
+                                    dir="ltr"
+                                  >
+                                    {client.username}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenQuotaModal(client)}
+                                    title="تعديل الكمية المخصصة أو المصروف"
+                                    className="px-2 py-0.5 rounded-md bg-[#070A10] hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-400 hover:text-emerald-400 flex items-center gap-1 transition-colors"
+                                  >
+                                    <SlidersHorizontal className="w-3 h-3" />
+                                    <span>مخصصات البيانات</span>
+                                  </button>
+                                </div>
 
-                          {/* 2. Status */}
-                          <td className="py-3.5 px-4 whitespace-nowrap">
-                            {statusInfo.status === 'active' && (
-                              <div className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-400">
-                                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                                <span>نشط</span>
-                                <span aria-hidden="true" className="text-slate-600">·</span>
-                                <span
-                                  className={
-                                    statusInfo.isExpiringSoon
-                                      ? 'text-amber-400'
-                                      : 'text-slate-400 font-normal'
-                                  }
-                                >
-                                  {statusInfo.daysText}
-                                </span>
-                              </div>
-                            )}
-                            {statusInfo.status === 'expired' && (
-                              <div className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-400">
-                                <Clock className="w-3.5 h-3.5 shrink-0" />
-                                <span>منتهي</span>
-                                <span aria-hidden="true" className="text-slate-600">·</span>
-                                <span className="text-slate-500 font-normal">{statusInfo.daysText}</span>
-                              </div>
-                            )}
-                            {statusInfo.status === 'inactive' && (
-                              <div className="inline-flex items-center gap-1.5 text-xs font-medium text-rose-400">
-                                <PauseCircle className="w-3.5 h-3.5 shrink-0" />
-                                <span>موقوف</span>
-                              </div>
-                            )}
-                          </td>
+                                {/* Data Quota & Consumption Card Under Subscriber */}
+                                <div className="bg-[#070A10]/90 border border-slate-800/90 rounded-xl p-2.5 space-y-1.5">
+                                  <div className="flex items-center justify-between text-[11px]">
+                                    <span className="text-slate-400 flex items-center gap-1">
+                                      <HardDrive className="w-3 h-3 text-emerald-400" />
+                                      <span>المصروف / المخصص:</span>
+                                    </span>
+                                    <span
+                                      className="font-mono tabular-nums font-semibold text-slate-200"
+                                      dir="ltr"
+                                    >
+                                      {formatDataMb(usedMb)} / {formatDataMb(quotaMb)}
+                                    </span>
+                                  </div>
 
-                          {/* 3. Expiry Date + Quick +30d */}
-                          <td className="py-3.5 px-4 whitespace-nowrap">
-                            <div className="flex items-center gap-2">
-                              <span
-                                className="font-mono text-xs tabular-nums text-slate-200"
-                                dir="ltr"
-                              >
-                                {client.expiry_date}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => handleQuickExtend30Days(client)}
-                                title="تمديد 30 يوماً"
-                                className="px-2 py-0.5 text-[11px] font-medium bg-slate-800/80 hover:bg-emerald-950 hover:text-emerald-300 text-slate-400 rounded-md transition-colors whitespace-nowrap"
-                              >
-                                +30ي
-                              </button>
-                            </div>
-                          </td>
+                                  <div className="w-full h-1.5 bg-slate-800/90 rounded-full overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full transition-all duration-300 ${
+                                        usagePct >= 90
+                                          ? 'bg-rose-500'
+                                          : usagePct >= 75
+                                          ? 'bg-amber-400'
+                                          : 'bg-emerald-500'
+                                      }`}
+                                      style={{ width: `${usagePct}%` }}
+                                    />
+                                  </div>
 
-                          {/* 4. Proxy IP:Port */}
-                          <td className="py-3.5 px-4 whitespace-nowrap">
-                            <div className="inline-flex items-center gap-1.5 font-mono text-xs tabular-nums text-slate-300" dir="ltr">
-                              <span>
-                                {client.proxy_host}:{client.proxy_port}
-                              </span>
-                              {client.proxy_username && client.proxy_password && (
-                                <span title={`User: ${client.proxy_username}`}>
-                                  <Lock className="w-3 h-3 text-emerald-400 shrink-0" />
-                                </span>
+                                  <div className="flex items-center justify-between text-[10px] text-slate-400">
+                                    <span>
+                                      {isQuotaExhausted ? (
+                                        <span className="text-rose-400 font-semibold">
+                                          انتهت الباقة المخصصة
+                                        </span>
+                                      ) : (
+                                        <>
+                                          متبقي:{' '}
+                                          <strong className="text-emerald-400 font-mono" dir="ltr">
+                                            {formatDataMb(remainingMb)}
+                                          </strong>
+                                        </>
+                                      )}
+                                    </span>
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-mono tabular-nums">{usagePct}%</span>
+                                      {usedMb > 0 && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleUpdateClientQuota(client, quotaMb, 0)}
+                                          className="text-sky-400 hover:text-sky-300 underline"
+                                        >
+                                          تصفير
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* 2. Status */}
+                            <td className="py-4 px-4 align-middle whitespace-nowrap">
+                              {statusInfo.status === 'active' && !isQuotaExhausted && (
+                                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/50 border border-emerald-800/50 text-xs font-semibold text-emerald-400">
+                                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                  <span>نشط</span>
+                                </div>
                               )}
-                            </div>
-                          </td>
+                              {statusInfo.status === 'active' && isQuotaExhausted && (
+                                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-950/50 border border-rose-800/50 text-xs font-semibold text-rose-400">
+                                  <PauseCircle className="w-3.5 h-3.5 shrink-0" />
+                                  <span>انتهت الباقة</span>
+                                </div>
+                              )}
+                              {statusInfo.status === 'expired' && (
+                                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-950/50 border border-amber-800/50 text-xs font-semibold text-amber-400">
+                                  <Clock className="w-3.5 h-3.5 shrink-0" />
+                                  <span>منتهي</span>
+                                </div>
+                              )}
+                              {statusInfo.status === 'inactive' && (
+                                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-950/50 border border-rose-800/50 text-xs font-semibold text-rose-400">
+                                  <PauseCircle className="w-3.5 h-3.5 shrink-0" />
+                                  <span>موقوف في Happ</span>
+                                </div>
+                              )}
+                            </td>
 
-                          {/* 5. Device Lock + Inline Unlock */}
-                          <td className="py-3.5 px-4 whitespace-nowrap">
-                            {boundDevice ? (
-                              <div className="inline-flex items-center gap-2">
-                                <span
-                                  className="text-xs text-sky-400 font-medium"
-                                  title={boundDevice}
+                            {/* 3. Professional Expiry Date Card Cell */}
+                            <td className="py-4 px-4 align-middle whitespace-nowrap">
+                              <div className="inline-flex items-center gap-2.5 bg-[#070A10] border border-slate-800/90 rounded-xl px-3 py-2">
+                                <div
+                                  className={`p-1.5 rounded-lg border ${
+                                    statusInfo.status === 'expired'
+                                      ? 'bg-amber-950/40 border-amber-800/50 text-amber-400'
+                                      : statusInfo.isExpiringSoon
+                                      ? 'bg-amber-950/40 border-amber-800/50 text-amber-400'
+                                      : 'bg-emerald-950/30 border-emerald-800/40 text-emerald-400'
+                                  }`}
                                 >
-                                  مرتبط بجهاز
-                                </span>
+                                  <Calendar className="w-3.5 h-3.5" />
+                                </div>
+                                <div className="space-y-0.5">
+                                  <div
+                                    className="font-mono text-xs font-bold tabular-nums text-slate-100"
+                                    dir="ltr"
+                                  >
+                                    {client.expiry_date}
+                                  </div>
+                                  <div
+                                    className={`text-[11px] font-medium ${
+                                      statusInfo.status === 'expired' || statusInfo.isExpiringSoon
+                                        ? 'text-amber-400'
+                                        : 'text-slate-400'
+                                    }`}
+                                  >
+                                    {statusInfo.daysText}
+                                  </div>
+                                </div>
                                 <button
                                   type="button"
-                                  onClick={() => handleResetDevice(client)}
-                                  title="فك قفل الجهاز"
-                                  className="px-2 py-0.5 rounded-md bg-sky-950/50 hover:bg-sky-900/70 border border-sky-800/50 text-sky-300 text-[11px] font-medium flex items-center gap-1 transition-colors"
+                                  onClick={() => handleQuickExtend30Days(client)}
+                                  title="تمديد الصلاحية 30 يوماً"
+                                  className="mr-1 px-2 py-1 text-[11px] font-semibold bg-emerald-950/60 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-800/60 rounded-lg transition-colors flex items-center gap-1"
                                 >
-                                  <RotateCcw className="w-3 h-3" />
-                                  <span>فك</span>
+                                  <CalendarPlus className="w-3 h-3" />
+                                  <span>+30ي</span>
                                 </button>
                               </div>
-                            ) : (
-                              <span className="text-xs text-slate-500">متاح</span>
-                            )}
-                          </td>
+                            </td>
 
-                          {/* 6. Unified Activation & Management Toolbar */}
-                          <td className="py-3.5 px-5 whitespace-nowrap text-left">
-                            <div className="flex items-center justify-end gap-1.5">
-                              {/* Copy Encrypted Happ Code */}
-                              <button
-                                type="button"
-                                disabled={isEncrypting}
-                                onClick={() => handleCopyHappCode(client)}
-                                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap border ${
-                                  isHappCopied
-                                    ? 'bg-emerald-950 border-emerald-600 text-emerald-300'
-                                    : 'bg-emerald-600 hover:bg-emerald-500 border-emerald-500 text-white'
-                                }`}
-                              >
-                                {isHappCopied ? (
-                                  <Check className="w-3.5 h-3.5" />
-                                ) : (
-                                  <ShieldCheck className="w-3.5 h-3.5" />
-                                )}
-                                <span>{isHappCopied ? 'تم النسخ' : 'كود Happ'}</span>
-                              </button>
+                            {/* 4. Professional Proxy Server Card Cell */}
+                            <td className="py-4 px-4 align-middle whitespace-nowrap">
+                              <div className="inline-flex flex-col gap-1.5 bg-[#070A10] border border-slate-800/90 rounded-xl px-3 py-2 min-w-[215px]">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div
+                                    className="inline-flex items-center gap-1.5 font-mono text-xs font-semibold tabular-nums text-slate-100"
+                                    dir="ltr"
+                                  >
+                                    <Server className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                    <span>
+                                      {proxyDetails.cleanHost}:{client.proxy_port}
+                                    </span>
+                                  </div>
+                                  <span className="px-1.5 py-0.5 rounded-md bg-emerald-950/70 border border-emerald-800/60 text-[10px] font-mono font-bold text-emerald-300">
+                                    SY 🇸🇾
+                                  </span>
+                                </div>
 
-                              {/* Copy Full Message */}
-                              <button
-                                type="button"
-                                disabled={isEncrypting}
-                                onClick={() => handleCopyCustomerMessage(client)}
-                                className={`px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap border ${
-                                  isMsgCopied
-                                    ? 'bg-sky-950 border-sky-600 text-sky-300'
-                                    : 'bg-[#070A10] hover:bg-slate-800 border-slate-800 text-slate-300'
-                                }`}
-                              >
-                                {isMsgCopied ? (
-                                  <Check className="w-3.5 h-3.5 text-sky-400" />
-                                ) : (
-                                  <Share2 className="w-3.5 h-3.5 text-sky-400" />
-                                )}
-                                <span>الرسالة</span>
-                              </button>
+                                <div className="flex items-center justify-between gap-2 text-[11px] pt-1 border-t border-slate-800/70">
+                                  {proxyDetails.subUser ? (
+                                    <span
+                                      className="font-mono text-sky-400 font-medium truncate max-w-[125px]"
+                                      dir="ltr"
+                                      title={client.proxy_username || ''}
+                                    >
+                                      👤 {proxyDetails.subUser}
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-500">بدون مصادقة</span>
+                                  )}
 
-                              {/* QR Code Modal */}
-                              <button
-                                type="button"
-                                onClick={() => handleOpenQrModal(client)}
-                                title="باركود التفعيل"
-                                className="p-1.5 rounded-lg bg-[#070A10] hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition-colors"
-                              >
-                                <QrCode className="w-4 h-4" />
-                              </button>
+                                  <div className="flex items-center gap-1" dir="ltr">
+                                    {proxyDetails.sessionId && (
+                                      <span className="px-1.5 py-0.5 rounded bg-slate-800/90 text-[10px] font-mono text-slate-300">
+                                        #{proxyDetails.sessionId.slice(0, 6)}
+                                      </span>
+                                    )}
+                                    {proxyDetails.hasAuth && (
+                                      <Lock className="w-3 h-3 text-emerald-400 shrink-0" />
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
 
-                              <span className="w-px h-4 bg-slate-800 mx-0.5" aria-hidden="true" />
+                            {/* 5. Professional Device Lock Cell */}
+                            <td className="py-4 px-4 align-middle whitespace-nowrap">
+                              {boundDevice ? (
+                                <div className="inline-flex items-center gap-2.5 bg-[#070A10] border border-sky-900/60 rounded-xl px-3 py-2">
+                                  <div className="p-1.5 rounded-lg bg-sky-950/60 border border-sky-800/60 text-sky-400">
+                                    <Fingerprint className="w-3.5 h-3.5" />
+                                  </div>
+                                  <div className="space-y-0.5">
+                                    <div className="text-xs font-semibold text-sky-300">
+                                      مرتبط بجهاز
+                                    </div>
+                                    <div
+                                      className="text-[10px] font-mono text-slate-400"
+                                      dir="ltr"
+                                      title={boundDevice}
+                                    >
+                                      {shortHwid}
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleResetDevice(client)}
+                                    title="فك قفل الجهاز للسماح بجهاز جديد"
+                                    className="mr-1 px-2 py-1 rounded-lg bg-sky-950/70 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-800/60 text-[11px] font-semibold flex items-center gap-1 transition-colors"
+                                  >
+                                    <RotateCcw className="w-3 h-3" />
+                                    <span>فك القفل</span>
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="inline-flex items-center gap-2 bg-[#070A10] border border-slate-800/80 rounded-xl px-3 py-2 text-xs text-slate-400">
+                                  <div className="p-1.5 rounded-lg bg-slate-800/70 text-emerald-400">
+                                    <Smartphone className="w-3.5 h-3.5" />
+                                  </div>
+                                  <div>
+                                    <div className="font-semibold text-slate-300 text-xs">
+                                      متاح للربط
+                                    </div>
+                                    <div className="text-[10px] text-slate-500">
+                                      يرتبط بأول جهاز يتصل
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </td>
 
-                              {/* Toggle Active */}
-                              <button
-                                type="button"
-                                onClick={() => handleToggleActive(client)}
-                                title={client.is_active ? 'إيقاف المشترك' : 'تفعيل المشترك'}
-                                className={`p-1.5 rounded-lg border transition-colors ${
-                                  client.is_active
-                                    ? 'bg-[#070A10] border-slate-800 text-emerald-400 hover:bg-slate-800'
-                                    : 'bg-[#070A10] border-slate-800 text-slate-500 hover:text-emerald-400 hover:bg-slate-800'
-                                }`}
-                              >
-                                <Power className="w-4 h-4" />
-                              </button>
+                            {/* 6. Unified Activation & Management Toolbar */}
+                            <td className="py-4 px-5 align-middle whitespace-nowrap text-left">
+                              <div className="flex items-center justify-end gap-1.5">
+                                {/* Copy Encrypted Happ Code */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopyHappCode(client)}
+                                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap border ${
+                                    isHappCopied
+                                      ? 'bg-emerald-950 border-emerald-600 text-emerald-300'
+                                      : 'bg-emerald-600 hover:bg-emerald-500 border-emerald-500 text-white'
+                                  }`}
+                                >
+                                  {isHappCopied ? (
+                                    <Check className="w-3.5 h-3.5" />
+                                  ) : (
+                                    <ShieldCheck className="w-3.5 h-3.5" />
+                                  )}
+                                  <span>{isHappCopied ? 'تم النسخ' : 'كود Happ'}</span>
+                                </button>
 
-                              {/* Edit */}
-                              <button
-                                type="button"
-                                onClick={() => openEditModal(client)}
-                                title="تعديل"
-                                className="p-1.5 rounded-lg bg-[#070A10] hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition-colors"
-                              >
-                                <Edit3 className="w-4 h-4" />
-                              </button>
+                                {/* Copy Customer Message (Opens Android vs iPhone choice modal) */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleRequestCustomerMessage(client)}
+                                  className={`px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap border ${
+                                    isMsgCopied
+                                      ? 'bg-sky-950 border-sky-600 text-sky-300'
+                                      : 'bg-[#070A10] hover:bg-slate-800 border-slate-800 text-slate-300'
+                                  }`}
+                                >
+                                  {isMsgCopied ? (
+                                    <Check className="w-3.5 h-3.5 text-sky-400" />
+                                  ) : (
+                                    <Share2 className="w-3.5 h-3.5 text-sky-400" />
+                                  )}
+                                  <span>الرسالة</span>
+                                </button>
 
-                              {/* Delete */}
-                              <button
-                                type="button"
-                                onClick={() => setDeletingClient(client)}
-                                title="حذف"
-                                className="p-1.5 rounded-lg bg-[#070A10] hover:bg-rose-950/60 border border-slate-800 hover:border-rose-800/60 text-slate-400 hover:text-rose-300 transition-colors"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
+                                {/* QR Code Modal */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenQrModal(client)}
+                                  title="باركود التفعيل"
+                                  className="p-1.5 rounded-lg bg-[#070A10] hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition-colors"
+                                >
+                                  <QrCode className="w-4 h-4" />
+                                </button>
+
+                                <span className="w-px h-4 bg-slate-800 mx-0.5" aria-hidden="true" />
+
+                                {/* Toggle Active */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleActive(client)}
+                                  title={
+                                    client.is_active
+                                      ? 'إيقاف اشتراك المشترك فوراً داخل تطبيق Happ'
+                                      : 'إعادة تفعيل اشتراك المشترك'
+                                  }
+                                  className={`p-1.5 rounded-lg border transition-colors ${
+                                    client.is_active
+                                      ? 'bg-[#070A10] border-slate-800 text-emerald-400 hover:bg-rose-950/50 hover:text-rose-400 hover:border-rose-800/60'
+                                      : 'bg-rose-950/40 border-rose-800/60 text-rose-400 hover:text-emerald-400 hover:bg-slate-800'
+                                  }`}
+                                >
+                                  <Power className="w-4 h-4" />
+                                </button>
+
+                                {/* Edit */}
+                                <button
+                                  type="button"
+                                  onClick={() => openEditModal(client)}
+                                  title="تعديل"
+                                  className="p-1.5 rounded-lg bg-[#070A10] hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition-colors"
+                                >
+                                  <Edit3 className="w-4 h-4" />
+                                </button>
+
+                                {/* Delete */}
+                                <button
+                                  type="button"
+                                  onClick={() => setDeletingClient(client)}
+                                  title="حذف"
+                                  className="p-1.5 rounded-lg bg-[#070A10] hover:bg-rose-950/60 border border-slate-800 hover:border-rose-800/60 text-slate-400 hover:text-rose-300 transition-colors"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        </React.Fragment>
                       );
                     })}
                   </tbody>
@@ -1049,8 +1353,13 @@ export default function App() {
                 const statusInfo = getClientStatusInfo(client);
                 const isHappCopied = copiedHappId === client.id;
                 const isMsgCopied = copiedMsgId === client.id;
-                const isEncrypting = encryptingId === client.id;
                 const boundDevice = client.registered_ip ? client.registered_ip.trim() : null;
+                const proxyDetails = parseProxyDetails(client);
+
+                const quotaMb = client.quota_mb && client.quota_mb > 0 ? client.quota_mb : 500;
+                const usedMb = client.used_mb && client.used_mb >= 0 ? client.used_mb : 0;
+                const remainingMb = Math.max(0, Number((quotaMb - usedMb).toFixed(1)));
+                const usagePct = Math.min(100, Math.round((usedMb / quotaMb) * 100));
 
                 return (
                   <div
@@ -1070,7 +1379,7 @@ export default function App() {
                             <span className="text-amber-400 font-medium">منتهي</span>
                           )}
                           {statusInfo.status === 'inactive' && (
-                            <span className="text-rose-400 font-medium">موقوف</span>
+                            <span className="text-rose-400 font-medium">موقوف في Happ</span>
                           )}
                           <span className="text-slate-600">·</span>
                           <span className="text-slate-400">{statusInfo.daysText}</span>
@@ -1091,7 +1400,7 @@ export default function App() {
                           className={`p-2 rounded-xl border ${
                             client.is_active
                               ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-400'
-                              : 'bg-[#070A10] border-slate-800 text-slate-500'
+                              : 'bg-rose-950/40 border-rose-800/60 text-rose-400'
                           }`}
                         >
                           <Power className="w-4 h-4" />
@@ -1113,32 +1422,94 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-800/70 text-xs">
-                      <div>
-                        <span className="text-slate-500 block">الانتهاء</span>
-                        <span className="font-mono tabular-nums text-slate-200 mt-0.5 block" dir="ltr">
+                    {/* Data Quota & Consumption Bar Underneath Mobile Subscriber Header */}
+                    <div className="bg-[#070A10] border border-slate-800/90 rounded-xl p-3 space-y-1.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-400 flex items-center gap-1.5">
+                          <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>المصروف / المخصص:</span>
+                        </span>
+                        <span className="font-mono font-bold text-slate-100" dir="ltr">
+                          {formatDataMb(usedMb)} / {formatDataMb(quotaMb)}
+                        </span>
+                      </div>
+                      <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${
+                            usagePct >= 90
+                              ? 'bg-rose-500'
+                              : usagePct >= 75
+                              ? 'bg-amber-400'
+                              : 'bg-emerald-500'
+                          }`}
+                          style={{ width: `${usagePct}%` }}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] text-slate-400 pt-0.5">
+                        <span>
+                          متبقي:{' '}
+                          <strong className="text-emerald-400 font-mono" dir="ltr">
+                            {formatDataMb(remainingMb)}
+                          </strong>
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenQuotaModal(client)}
+                            className="text-emerald-400 font-medium underline"
+                          >
+                            تعديل المخصصات
+                          </button>
+                          {usedMb > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateClientQuota(client, quotaMb, 0)}
+                              className="text-sky-400 font-medium underline"
+                            >
+                              تصفير
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Redesigned Mobile Info Grid (Expiry, Proxy, Device) */}
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div className="bg-[#070A10] border border-slate-800/80 rounded-xl p-2.5">
+                        <span className="text-slate-500 text-[11px] block">الانتهاء</span>
+                        <span
+                          className="font-mono font-semibold tabular-nums text-slate-100 mt-0.5 block"
+                          dir="ltr"
+                        >
                           {client.expiry_date}
                         </span>
                       </div>
-                      <div>
-                        <span className="text-slate-500 block">البروكسي</span>
-                        <span className="font-mono tabular-nums text-slate-200 mt-0.5 block truncate" dir="ltr">
-                          {client.proxy_host}:{client.proxy_port}
+                      <div className="bg-[#070A10] border border-slate-800/80 rounded-xl p-2.5">
+                        <span className="text-slate-500 text-[11px] block">
+                          البروكسي {proxyDetails.subUser ? `(${proxyDetails.subUser})` : ''}
+                        </span>
+                        <span
+                          className="font-mono font-semibold tabular-nums text-slate-100 mt-0.5 block truncate"
+                          dir="ltr"
+                        >
+                          {proxyDetails.cleanHost}:{client.proxy_port}
                         </span>
                       </div>
-                      <div>
-                        <span className="text-slate-500 block">الجهاز</span>
+                      <div className="bg-[#070A10] border border-slate-800/80 rounded-xl p-2.5">
+                        <span className="text-slate-500 text-[11px] block">الجهاز</span>
                         {boundDevice ? (
                           <button
                             type="button"
                             onClick={() => handleResetDevice(client)}
-                            className="text-sky-400 font-medium mt-0.5 inline-flex items-center gap-1"
+                            className="text-sky-400 font-semibold mt-0.5 inline-flex items-center gap-1"
                           >
                             <span>مقفل (فك)</span>
                             <RotateCcw className="w-3 h-3" />
                           </button>
                         ) : (
-                          <span className="text-slate-500 mt-0.5 block">متاح</span>
+                          <span className="text-emerald-400 font-medium mt-0.5 block">
+                            متاح للربط
+                          </span>
                         )}
                       </div>
                     </div>
@@ -1146,7 +1517,6 @@ export default function App() {
                     <div className="grid grid-cols-3 gap-2 pt-1">
                       <button
                         type="button"
-                        disabled={isEncrypting}
                         onClick={() => handleCopyHappCode(client)}
                         className="py-2 px-3 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center gap-1.5"
                       >
@@ -1156,11 +1526,14 @@ export default function App() {
 
                       <button
                         type="button"
-                        disabled={isEncrypting}
-                        onClick={() => handleCopyCustomerMessage(client)}
+                        onClick={() => handleRequestCustomerMessage(client)}
                         className="py-2 px-3 rounded-xl text-xs font-semibold bg-[#070A10] border border-slate-800 text-slate-200 flex items-center justify-center gap-1.5"
                       >
-                        {isMsgCopied ? <Check className="w-3.5 h-3.5 text-sky-400" /> : <Share2 className="w-3.5 h-3.5 text-sky-400" />}
+                        {isMsgCopied ? (
+                          <Check className="w-3.5 h-3.5 text-sky-400" />
+                        ) : (
+                          <Share2 className="w-3.5 h-3.5 text-sky-400" />
+                        )}
                         <span>الرسالة</span>
                       </button>
 
@@ -1180,6 +1553,198 @@ export default function App() {
           </>
         )}
       </main>
+
+      {/* Platform Selector Modal When Clicking "الرسالة" */}
+      {messagePlatformClient && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-sm bg-[#0E131F] border border-slate-800/90 rounded-2xl shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800/80">
+              <div className="flex items-center gap-2">
+                <Share2 className="w-4 h-4 text-sky-400" />
+                <h3 className="text-sm font-bold text-white">
+                  اختر نوع جهاز المشترك ({messagePlatformClient.username})
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMessagePlatformClient(null)}
+                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800/80 rounded-lg transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3">
+              <p className="text-xs text-slate-400 leading-relaxed">
+                سيتم نسخ رسالة التفعيل مع <strong className="text-slate-200">رابط التطبيق المناسب فقط</strong> وكود التفعيل المشفر:
+              </p>
+
+              <div className="grid grid-cols-1 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => handleConfirmCopyPlatformMessage('android')}
+                  className="w-full p-3.5 rounded-xl bg-[#070A10] hover:bg-emerald-950/40 border border-slate-800 hover:border-emerald-600/70 flex items-center justify-between transition-all group"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 rounded-xl bg-emerald-950/80 border border-emerald-800/70 text-emerald-400">
+                      <Download className="w-5 h-5" />
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm font-bold text-white group-hover:text-emerald-300">
+                        مشترك أندرويد (Android)
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        يرسل رابط تحميل APK المباشر فقط + الكود المشفر
+                      </div>
+                    </div>
+                  </div>
+                  <Copy className="w-4 h-4 text-slate-500 group-hover:text-emerald-400" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleConfirmCopyPlatformMessage('ios')}
+                  className="w-full p-3.5 rounded-xl bg-[#070A10] hover:bg-sky-950/40 border border-slate-800 hover:border-sky-600/70 flex items-center justify-between transition-all group"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 rounded-xl bg-sky-950/80 border border-sky-800/70 text-sky-400">
+                      <Smartphone className="w-5 h-5" />
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm font-bold text-white group-hover:text-sky-300">
+                        مشترك آيفون (iPhone / iOS)
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        يرسل رابط App Store فقط + الكود المشفر
+                      </div>
+                    </div>
+                  </div>
+                  <Copy className="w-4 h-4 text-slate-500 group-hover:text-sky-400" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Quota & Usage Adjustment Modal */}
+      {quotaEditClient && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-md bg-[#0E131F] border border-slate-800/90 rounded-2xl shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800/80">
+              <div className="flex items-center gap-2">
+                <HardDrive className="w-4 h-4 text-emerald-400" />
+                <h3 className="text-sm font-bold text-white">
+                  مخصصات واستهلاك البيانات · {quotaEditClient.username}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setQuotaEditClient(null)}
+                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800/80 rounded-lg transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-medium text-slate-300">
+                    الكمية المخصصة للمشترك (بالميجابايت MB)
+                  </label>
+                  <div className="flex items-center gap-1">
+                    {[
+                      { label: '100MB', val: 100 },
+                      { label: '250MB', val: 250 },
+                      { label: '500MB', val: 500 },
+                      { label: '1GB', val: 1024 },
+                      { label: '2GB', val: 2048 },
+                    ].map((preset) => (
+                      <button
+                        key={preset.val}
+                        type="button"
+                        onClick={() => setQuickQuotaMb(String(preset.val))}
+                        className={`px-2 py-0.5 text-[10px] font-mono rounded border transition-colors ${
+                          Number(quickQuotaMb) === preset.val
+                            ? 'bg-emerald-950 border-emerald-600 text-emerald-300'
+                            : 'bg-[#070A10] border-slate-800 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <input
+                  type="number"
+                  min={1}
+                  value={quickQuotaMb}
+                  onChange={(e) => setQuickQuotaMb(e.target.value)}
+                  dir="ltr"
+                  className="w-full bg-[#070A10] border border-slate-800 focus:border-emerald-500 rounded-xl px-3.5 py-2 text-sm text-white font-mono focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-medium text-slate-300">
+                    كم صرف منها حتى الآن (بالميجابايت MB)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setQuickUsedMb('0')}
+                    className="text-[11px] text-sky-400 hover:text-sky-300 underline"
+                  >
+                    تصفير العداد (0 MB)
+                  </button>
+                </div>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.1"
+                  value={quickUsedMb}
+                  onChange={(e) => setQuickUsedMb(e.target.value)}
+                  dir="ltr"
+                  className="w-full bg-[#070A10] border border-slate-800 focus:border-emerald-500 rounded-xl px-3.5 py-2 text-sm text-white font-mono focus:outline-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800/80">
+                <button
+                  type="button"
+                  onClick={() => setQuotaEditClient(null)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-300 bg-slate-800/90 hover:bg-slate-800 rounded-xl transition-colors"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="button"
+                  disabled={savingQuota}
+                  onClick={() =>
+                    handleUpdateClientQuota(
+                      quotaEditClient,
+                      Number(quickQuotaMb) || 500,
+                      Number(quickUsedMb) || 0
+                    )
+                  }
+                  className="px-5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-colors"
+                >
+                  {savingQuota ? 'جاري الحفظ...' : 'حفظ المخصصات'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toast Notification */}
       {toastMessage && (
