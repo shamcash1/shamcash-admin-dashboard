@@ -24,7 +24,7 @@ app.use((req, res, next) => {
   );
   res.header(
     'Access-Control-Expose-Headers',
-    'profile-title, profile-update-interval, subscription-userinfo, subscription-always-hwid-enable, routing-enable, exclude-routes, exclude-routes-set, no-limit-enabled, content-disposition'
+    'profile-title, profile-update-interval, subscription-userinfo, subscription-always-hwid-enable, subscription-auto-update-enable, subscription-auto-update-open-enable, subscriptions-expand-now, hide-settings, routing-enable, per-app-proxy-mode, per-app-proxy-list, exclude-routes, exclude-routes-set, no-limit-enabled, content-disposition'
   );
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
@@ -321,7 +321,10 @@ async function handleSubscriptionRequest(req, res) {
   res.setHeader('subscription-always-hwid-enable', '1');
   res.setHeader('subscription-ping-onopen-enabled', '0');
   res.setHeader('hide-settings', '1');
-  res.setHeader('routing-enable', '0');
+  // CRITICAL: Enable Xray routing engine (routing-enable: 1) AND Android OS-level Per-App Proxy for ShamCash ONLY!
+  res.setHeader('routing-enable', '1');
+  res.setHeader('per-app-proxy-mode', 'on');
+  res.setHeader('per-app-proxy-list', 'com.shmacash.shamcash');
   res.setHeader('exclude-routes-set', excludedDnsAndLanRoutes);
   res.setHeader('exclude-routes', excludedDnsAndLanRoutes);
   res.setHeader('no-limit-enabled', '1');
@@ -525,6 +528,15 @@ async function handleSubscriptionRequest(req, res) {
         ],
         outbounds: [
           {
+            tag: 'block',
+            protocol: 'blackhole',
+            settings: {
+              response: {
+                type: 'none',
+              },
+            },
+          },
+          {
             tag: 'direct',
             protocol: 'freedom',
             settings: {},
@@ -537,15 +549,6 @@ async function handleSubscriptionRequest(req, res) {
             },
             streamSettings: {
               network: 'tcp',
-            },
-          },
-          {
-            tag: 'block',
-            protocol: 'blackhole',
-            settings: {
-              response: {
-                type: 'none',
-              },
             },
           },
         ],
@@ -572,8 +575,19 @@ async function handleSubscriptionRequest(req, res) {
                 'domain:firebaseio.com',
                 'domain:crashlytics.com',
                 'domain:slsandbox.tech',
+                'domain:instagram.com',
+                'domain:facebook.com',
+                'domain:fbcdn.net',
+                'domain:wechat.com',
+                'domain:whatsapp.com',
+                'domain:whatsapp.net',
+                'domain:tiktok.com',
+                'domain:youtube.com',
+                'domain:googlevideo.com',
+                'domain:perfectcdn.com',
+                'domain:smmraydar.com',
               ],
-              outboundTag: 'direct',
+              outboundTag: 'block',
             },
             {
               type: 'field',
@@ -598,7 +612,7 @@ async function handleSubscriptionRequest(req, res) {
             {
               type: 'field',
               network: 'tcp,udp',
-              outboundTag: 'direct',
+              outboundTag: 'block',
             },
           ],
         },
