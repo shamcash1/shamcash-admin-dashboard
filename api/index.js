@@ -210,11 +210,18 @@ function parseStoredProxyHost(rawProxyHost, fallbackUser = '', fallbackPass = ''
   return { host, pUser, pPass, quotaMb, usedMb, subUserPrefix };
 }
 
+const DEFAULT_NODEMAVEN_API_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzk0Njk3ODkxLCJpYXQiOjE3OTQ2OTYwOTEsImp0aSI6ImIyZDJlMTdlYjEwMzQ0MjE4MjMwNWNlMDc4M2Q2MTYzIiwidXNlcl9pZCI6IjVmODk1MDNhLWUxZDUtNGE5Mi1hOWQzLTRkYTRmZjNmNzRjOSJ9.4k0JY_YQyENX0pA1nHZ9Ese4y4IIEQ4kxzOt1OzbP-U';
+
+function getNodeMavenApiKey() {
+  const rawKey = (process.env.NODEMAVEN_API_KEY || DEFAULT_NODEMAVEN_API_KEY).trim();
+  return rawKey.replace(/^x-api-key\s+/i, '').trim();
+}
+
 // NodeMaven live sub-user usage fetcher (queries https://api.nodemaven.com/api/v2/base/sub-users/)
 async function fetchNodeMavenSubUsersMap() {
-  const rawKey = (process.env.NODEMAVEN_API_KEY || '').trim();
-  if (!rawKey) return null;
-  const cleanKey = rawKey.replace(/^x-api-key\s+/i, '').trim();
+  const cleanKey = getNodeMavenApiKey();
+  if (!cleanKey) return null;
 
   try {
     const res = await fetch('https://api.nodemaven.com/api/v2/base/sub-users/?limit=100', {
@@ -229,15 +236,17 @@ async function fetchNodeMavenSubUsersMap() {
       return null;
     }
     const data = await res.json();
-    const list = Array.isArray(data)
-      ? data
-      : Array.isArray(data?.results)
-        ? data.results
-        : Array.isArray(data?.data)
-          ? data.data
-          : Array.isArray(data?.sub_users)
-            ? data.sub_users
-            : [];
+    const list = Array.isArray(data?.payload)
+      ? data.payload
+      : Array.isArray(data)
+        ? data
+        : Array.isArray(data?.results)
+          ? data.results
+          : Array.isArray(data?.data)
+            ? data.data
+            : Array.isArray(data?.sub_users)
+              ? data.sub_users
+              : [];
     const map = {};
     for (const item of list) {
       const u = String(item.proxy_username || item.username || '').trim().toLowerCase();
@@ -247,10 +256,11 @@ async function fetchNodeMavenSubUsersMap() {
         map[u] = {
           id: item.id,
           proxy_username: item.proxy_username || item.username,
+          is_default_user: Boolean(item.is_default_user),
           traffic_limit_bytes: limitBytes,
           traffic_used_bytes: usedBytes,
-          traffic_limit_mb: Number((limitBytes / (1024 * 1024)).toFixed(2)),
-          traffic_used_mb: Number((usedBytes / (1024 * 1024)).toFixed(2)),
+          traffic_limit_mb: Number((limitBytes / 1000000).toFixed(2)),
+          traffic_used_mb: Number((usedBytes / 1000000).toFixed(2)),
           is_traffic_limited: Boolean(item.is_traffic_limited),
         };
       }
@@ -258,6 +268,30 @@ async function fetchNodeMavenSubUsersMap() {
     return map;
   } catch (err) {
     console.error('[NODEMAVEN] Error fetching sub-users:', err);
+    return null;
+  }
+}
+
+async function fetchNodeMavenAccountBalance() {
+  const cleanKey = getNodeMavenApiKey();
+  if (!cleanKey) return null;
+  try {
+    const res = await fetch('https://api.nodemaven.com/api/v2/base/account/balance/', {
+      method: 'GET',
+      headers: {
+        Authorization: `x-api-key ${cleanKey}`,
+        Accept: 'application/json',
+      },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const remBytes = Number(data?.traffic_remaining ?? 0);
+    return {
+      traffic_remaining_bytes: remBytes,
+      traffic_remaining_mb: Number((remBytes / 1000000).toFixed(2)),
+      updated_at: data?.updated_at || null,
+    };
+  } catch {
     return null;
   }
 }
@@ -311,20 +345,20 @@ async function handleSubscriptionRequest(req, res) {
 
     let { host, pUser, pPass, quotaMb, usedMb, subUserPrefix } = parsedProxy;
 
-    // Optional live sync with NodeMaven API if NODEMAVEN_API_KEY is configured
-    if (subUserPrefix && process.env.NODEMAVEN_API_KEY) {
+    // Live sync with NodeMaven API
+    if (subUserPrefix) {
       const nmMap = await fetchNodeMavenSubUsersMap();
       const nmEntry = nmMap ? nmMap[subUserPrefix.toLowerCase()] : null;
       if (nmEntry) {
         if (nmEntry.traffic_limit_bytes > 0) {
-          quotaMb = Number((nmEntry.traffic_limit_bytes / (1024 * 1024)).toFixed(2));
+          quotaMb = nmEntry.traffic_limit_mb;
         }
-        usedMb = Number((nmEntry.traffic_used_bytes / (1024 * 1024)).toFixed(2));
+        usedMb = nmEntry.traffic_used_mb;
       }
     }
 
-    const limitBytes = quotaMb > 0 ? Math.round(quotaMb * 1024 * 1024) : 107374182400;
-    const usedBytes = Math.min(limitBytes, Math.max(0, Math.round(usedMb * 1024 * 1024)));
+    const limitBytes = quotaMb > 0 ? Math.round(quotaMb * 1000000) : 100000000000;
+    const usedBytes = Math.min(limitBytes, Math.max(0, Math.round(usedMb * 1000000)));
     const isQuotaExhausted = quotaMb > 0 && usedMb >= quotaMb;
 
     // CRITICAL FIX FOR PAUSE / EXPIRY / DEVICE LOCK / QUOTA EXHAUSTED:
@@ -592,9 +626,13 @@ app.get('/api/sub/:username', handleSubscriptionRequest);
 // NodeMaven Live Traffic Sync Endpoint for Admin Dashboard
 async function handleNodeMavenUsage(_req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-  const map = await fetchNodeMavenSubUsersMap();
+  const [map, account] = await Promise.all([
+    fetchNodeMavenSubUsersMap(),
+    fetchNodeMavenAccountBalance(),
+  ]);
   return res.json({
     connected: Boolean(map),
+    account: account || null,
     sub_users: map || {},
   });
 }

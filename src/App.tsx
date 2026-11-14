@@ -97,6 +97,7 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [nodeMavenMap, setNodeMavenMap] = useState<Record<string, NodeMavenSubUserUsage>>({});
   const [nodeMavenConnected, setNodeMavenConnected] = useState<boolean>(false);
+  const [nodeMavenAccountMb, setNodeMavenAccountMb] = useState<number | null>(null);
 
   // Modals state
   const [modalOpen, setModalOpen] = useState<boolean>(false);
@@ -131,6 +132,9 @@ export default function App() {
         if (json?.connected && json?.sub_users) {
           setNodeMavenConnected(true);
           setNodeMavenMap(json.sub_users as Record<string, NodeMavenSubUserUsage>);
+          if (typeof json?.account?.traffic_remaining_mb === 'number') {
+            setNodeMavenAccountMb(json.account.traffic_remaining_mb);
+          }
           return;
         }
       } catch {
@@ -164,7 +168,11 @@ export default function App() {
 
   useEffect(() => {
     fetchClients();
-  }, [fetchClients]);
+    const timer = setInterval(() => {
+      syncNodeMavenUsage();
+    }, 20000);
+    return () => clearInterval(timer);
+  }, [fetchClients, syncNodeMavenUsage]);
 
   const clients = useMemo(() => {
     const map = new Map<string, ProxyClient>();
@@ -190,11 +198,11 @@ export default function App() {
         const limitMb =
           typeof nm.traffic_limit_mb === 'number'
             ? nm.traffic_limit_mb
-            : Number((nm.traffic_limit_bytes / (1024 * 1024)).toFixed(2));
+            : Number((nm.traffic_limit_bytes / 1000000).toFixed(2));
         const usedMb =
           typeof nm.traffic_used_mb === 'number'
             ? nm.traffic_used_mb
-            : Number((nm.traffic_used_bytes / (1024 * 1024)).toFixed(2));
+            : Number((nm.traffic_used_bytes / 1000000).toFixed(2));
 
         return {
           ...client,
@@ -741,6 +749,16 @@ export default function App() {
               <span>تصدير CSV</span>
             </button>
 
+            {nodeMavenAccountMb !== null && (
+              <div className="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-950/60 border border-emerald-800/70 text-emerald-300 flex items-center gap-1.5 whitespace-nowrap">
+                <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
+                <span>رصيد NodeMaven العام:</span>
+                <strong className="font-mono text-white" dir="ltr">
+                  {formatDataMb(nodeMavenAccountMb)}
+                </strong>
+              </div>
+            )}
+
             <button
               type="button"
               onClick={() => fetchClients(true)}
@@ -1032,13 +1050,21 @@ export default function App() {
                                       <span className="flex items-center gap-1.5">
                                         <HardDrive className="w-3.5 h-3.5 text-sky-400 shrink-0" />
                                         <span>
-                                          {nodeMavenConnected
-                                            ? 'مفتوح في NodeMaven (بدون حد)'
-                                            : `مخصصات NodeMaven (${proxyDetails.subUser || client.username})`}
+                                          {!nodeMavenConnected
+                                            ? `جاري جلب مخصصات (${proxyDetails.subUser || client.username})...`
+                                            : proxyDetails.subUser &&
+                                              nodeMavenMap[proxyDetails.subUser.toLowerCase()]
+                                            ? 'مفتوح في NodeMaven (من الرصيد العام)'
+                                            : `اليوزر (${proxyDetails.subUser || client.username}) غير موجود في NodeMaven`}
                                         </span>
                                       </span>
                                       <span className="text-[10px] font-mono text-amber-400">
-                                        {nodeMavenConnected ? '∞' : 'بانتظار API Key'}
+                                        {!nodeMavenConnected
+                                          ? '...'
+                                          : proxyDetails.subUser &&
+                                            nodeMavenMap[proxyDetails.subUser.toLowerCase()]
+                                          ? '∞'
+                                          : 'محذوف'}
                                       </span>
                                     </div>
                                   )}
@@ -1424,11 +1450,21 @@ export default function App() {
                           <span className="flex items-center gap-1.5">
                             <HardDrive className="w-3.5 h-3.5 text-sky-400" />
                             <span>
-                              مخصصات NodeMaven ({proxyDetails.subUser || client.username})
+                              {!nodeMavenConnected
+                                ? `جاري جلب (${proxyDetails.subUser || client.username})...`
+                                : proxyDetails.subUser &&
+                                  nodeMavenMap[proxyDetails.subUser.toLowerCase()]
+                                ? 'مفتوح في NodeMaven (بدون حد)'
+                                : `اليوزر (${proxyDetails.subUser || client.username}) غير موجود في NodeMaven`}
                             </span>
                           </span>
                           <span className="text-[11px] font-mono text-amber-400">
-                            {nodeMavenConnected ? 'مفتوح' : 'بانتظار API Key'}
+                            {!nodeMavenConnected
+                              ? '...'
+                              : proxyDetails.subUser &&
+                                nodeMavenMap[proxyDetails.subUser.toLowerCase()]
+                              ? '∞'
+                              : 'محذوف'}
                           </span>
                         </div>
                       )}
