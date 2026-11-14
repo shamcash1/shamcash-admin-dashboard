@@ -23,7 +23,6 @@ import {
   Smartphone,
   Server,
   HardDrive,
-  SlidersHorizontal,
   X,
   Fingerprint,
 } from 'lucide-react';
@@ -53,6 +52,16 @@ type FilterTab = 'all' | ClientComputedStatus | 'expiring_soon';
 interface LocalDeltaState {
   upserted: Record<string, ProxyClient>;
   deletedIds: string[];
+}
+
+interface NodeMavenSubUserUsage {
+  id?: string;
+  proxy_username: string;
+  traffic_limit_bytes: number;
+  traffic_used_bytes: number;
+  traffic_limit_mb: number;
+  traffic_used_mb: number;
+  is_traffic_limited: boolean;
 }
 
 function loadLocalDelta(): LocalDeltaState {
@@ -86,6 +95,8 @@ export default function App() {
   const [copiedIosApp, setCopiedIosApp] = useState<boolean>(false);
   const [happCache, setHappCache] = useState<Record<string, string>>({});
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [nodeMavenMap, setNodeMavenMap] = useState<Record<string, NodeMavenSubUserUsage>>({});
+  const [nodeMavenConnected, setNodeMavenConnected] = useState<boolean>(false);
 
   // Modals state
   const [modalOpen, setModalOpen] = useState<boolean>(false);
@@ -99,12 +110,6 @@ export default function App() {
   // Platform choice modal when clicking "الرسالة"
   const [messagePlatformClient, setMessagePlatformClient] = useState<ProxyClient | null>(null);
 
-  // Quick Quota & Usage adjustment modal
-  const [quotaEditClient, setQuotaEditClient] = useState<ProxyClient | null>(null);
-  const [quickQuotaMb, setQuickQuotaMb] = useState<string>('500');
-  const [quickUsedMb, setQuickUsedMb] = useState<string>('0');
-  const [savingQuota, setSavingQuota] = useState<boolean>(false);
-
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
     setTimeout(() => {
@@ -112,41 +117,25 @@ export default function App() {
     }, 2800);
   }, []);
 
-  const syncNodeMavenUsage = useCallback(async (loadedClients: ProxyClient[]) => {
-    try {
-      const res = await fetch('/api/nodemaven/usage', { method: 'GET' });
-      if (!res.ok) return;
-      const json = await res.json();
-      if (!json?.synced || !json?.subUsers) return;
+  const syncNodeMavenUsage = useCallback(async () => {
+    const endpoints = [
+      '/api/nodemaven/usage',
+      'https://shamcash-proxy-api.vercel.app/api/nodemaven/usage',
+    ];
 
-      const subUsersMap = json.subUsers as Record<
-        string,
-        { trafficLimitMb: number | null; trafficUsedMb: number | null }
-      >;
-
-      setRemoteClients((prev) =>
-        (prev.length > 0 ? prev : loadedClients).map((c) => {
-          const subPrefix = String(c.proxy_username || '')
-            .split('-country-')[0]
-            .trim()
-            .toLowerCase();
-          const match = subPrefix ? subUsersMap[subPrefix] : undefined;
-          if (!match) return c;
-          return {
-            ...c,
-            quota_mb:
-              match.trafficLimitMb !== null && match.trafficLimitMb > 0
-                ? match.trafficLimitMb
-                : c.quota_mb,
-            used_mb:
-              match.trafficUsedMb !== null && match.trafficUsedMb >= 0
-                ? match.trafficUsedMb
-                : c.used_mb,
-          };
-        })
-      );
-    } catch {
-      // Optional sync if NODEMAVEN_API_KEY is configured on server
+    for (const url of endpoints) {
+      try {
+        const res = await fetch(url, { method: 'GET' });
+        if (!res.ok) continue;
+        const json = await res.json();
+        if (json?.connected && json?.sub_users) {
+          setNodeMavenConnected(true);
+          setNodeMavenMap(json.sub_users as Record<string, NodeMavenSubUserUsage>);
+          return;
+        }
+      } catch {
+        // try next endpoint
+      }
     }
   }, []);
 
@@ -156,15 +145,14 @@ export default function App() {
       setRefreshing(true);
 
       try {
-        const { data, error } = await supabase
-          .from('proxy_clients')
-          .select('*')
-          .order('created_at', { ascending: false });
+        const [{ data, error }] = await Promise.all([
+          supabase.from('proxy_clients').select('*').order('created_at', { ascending: false }),
+          syncNodeMavenUsage(),
+        ]);
 
         if (!error && data) {
           const normalized = (data as ProxyClient[]).map(normalizeProxyClient);
           setRemoteClients(normalized);
-          syncNodeMavenUsage(normalized);
         }
       } finally {
         setLoading(false);
@@ -190,12 +178,36 @@ export default function App() {
         map.set(id, c);
       }
     }
-    return Array.from(map.values()).sort((a, b) => {
-      const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
-      return dateB - dateA;
-    });
-  }, [remoteClients, localDelta]);
+    return Array.from(map.values())
+      .map((client) => {
+        const subPrefix = String(client.proxy_username || '')
+          .split('-country-')[0]
+          .trim()
+          .toLowerCase();
+        const nm = subPrefix ? nodeMavenMap[subPrefix] : undefined;
+        if (!nm) return client;
+
+        const limitMb =
+          typeof nm.traffic_limit_mb === 'number'
+            ? nm.traffic_limit_mb
+            : Number((nm.traffic_limit_bytes / (1024 * 1024)).toFixed(2));
+        const usedMb =
+          typeof nm.traffic_used_mb === 'number'
+            ? nm.traffic_used_mb
+            : Number((nm.traffic_used_bytes / (1024 * 1024)).toFixed(2));
+
+        return {
+          ...client,
+          quota_mb: limitMb > 0 ? limitMb : client.quota_mb,
+          used_mb: usedMb >= 0 ? usedMb : client.used_mb,
+        };
+      })
+      .sort((a, b) => {
+        const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return dateB - dateA;
+      });
+  }, [remoteClients, localDelta, nodeMavenMap]);
 
   // Preload encrypted Happ codes for all clients so mobile clipboard copy is 100% synchronous
   useEffect(() => {
@@ -305,7 +317,7 @@ export default function App() {
         c.proxy_port,
         c.proxy_username || '',
         c.proxy_password || '',
-        c.quota_mb ?? 500,
+        c.quota_mb ?? 0,
         c.used_mb ?? 0,
         c.registered_ip || '',
       ]
@@ -399,71 +411,6 @@ export default function App() {
     }, 2200);
   };
 
-  // Open Quick Quota Modal
-  const handleOpenQuotaModal = (client: ProxyClient) => {
-    setQuotaEditClient(client);
-    setQuickQuotaMb(String(client.quota_mb && client.quota_mb > 0 ? client.quota_mb : 500));
-    setQuickUsedMb(String(client.used_mb && client.used_mb >= 0 ? client.used_mb : 0));
-  };
-
-  // Update Quota & Used MB directly
-  const handleUpdateClientQuota = async (
-    client: ProxyClient,
-    newQuotaMb: number,
-    newUsedMb: number
-  ) => {
-    setSavingQuota(true);
-    try {
-      const safeQuota = Math.max(1, Math.round(newQuotaMb));
-      const safeUsed = Math.max(0, Number(newUsedMb.toFixed(2)));
-      const packedHost = packProxyHostWithAuth(
-        client.proxy_host,
-        client.proxy_username,
-        client.proxy_password,
-        safeQuota,
-        safeUsed
-      );
-
-      const { data, error } = await supabase
-        .from('proxy_clients')
-        .update({
-          proxy_host: packedHost,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', client.id)
-        .select();
-
-      if (!error && data && data.length > 0) {
-        const updated = normalizeProxyClient(data[0] as ProxyClient);
-        setRemoteClients((prev) => prev.map((c) => (c.id === client.id ? updated : c)));
-        showToast(
-          `تم تحديث باقة ${client.username} (${formatDataMb(safeUsed)} / ${formatDataMb(safeQuota)})`
-        );
-        setQuotaEditClient(null);
-        return;
-      }
-
-      const updatedFallback: ProxyClient = {
-        ...client,
-        quota_mb: safeQuota,
-        used_mb: safeUsed,
-        updated_at: new Date().toISOString(),
-      };
-      const nextDelta: LocalDeltaState = {
-        ...localDelta,
-        upserted: { ...localDelta.upserted, [client.id]: updatedFallback },
-      };
-      setLocalDelta(nextDelta);
-      saveLocalDelta(nextDelta);
-      showToast(
-        `تم تحديث باقة ${client.username} (${formatDataMb(safeUsed)} / ${formatDataMb(safeQuota)})`
-      );
-      setQuotaEditClient(null);
-    } finally {
-      setSavingQuota(false);
-    }
-  };
-
   // Save Client (Add / Edit Modal)
   const handleSaveClient = async (
     clientData: Omit<ProxyClient, 'id' | 'created_at' | 'updated_at'>,
@@ -493,6 +440,7 @@ export default function App() {
       if (!error && data && data.length > 0) {
         const created = normalizeProxyClient(data[0] as ProxyClient);
         setRemoteClients((prev) => [created, ...prev]);
+        syncNodeMavenUsage();
         showToast(`تمت إضافة ${created.username}`);
         return;
       }
@@ -531,6 +479,7 @@ export default function App() {
           setLocalDelta(nextDelta);
           saveLocalDelta(nextDelta);
         }
+        syncNodeMavenUsage();
         showToast(`تم تحديث ${updated.username}`);
         return;
       }
@@ -797,7 +746,7 @@ export default function App() {
               onClick={() => fetchClients(true)}
               disabled={refreshing}
               className="p-1.5 rounded-lg bg-[#0E131F] hover:bg-slate-800/80 border border-slate-800 text-slate-400 hover:text-white transition-colors"
-              title="تحديث البيانات"
+              title="مزامنة وتحديث البيانات من NodeMaven"
             >
               <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin text-emerald-400' : ''}`} />
             </button>
@@ -966,13 +915,13 @@ export default function App() {
           </div>
         ) : (
           <>
-            {/* DESKTOP TABLE: Professional SaaS Layout with Data Allocation Bar Under Each User */}
+            {/* DESKTOP TABLE: Professional SaaS Layout with NodeMaven Quota Bar Under Each User */}
             <div className="hidden md:block bg-[#0E131F] border border-slate-800/80 rounded-2xl overflow-hidden shadow-xl">
               <div className="overflow-x-auto">
                 <table className="w-full text-right border-collapse">
                   <thead>
                     <tr className="border-b border-slate-800/90 bg-[#070A10]/80 text-xs font-semibold text-slate-400">
-                      <th className="py-3.5 px-5 whitespace-nowrap">المشترك والباقة</th>
+                      <th className="py-3.5 px-5 whitespace-nowrap">المشترك ومخصصات NodeMaven</th>
                       <th className="py-3.5 px-4 whitespace-nowrap">الحالة</th>
                       <th className="py-3.5 px-4 whitespace-nowrap">تاريخ الانتهاء</th>
                       <th className="py-3.5 px-4 whitespace-nowrap">البروكسي والخادم</th>
@@ -988,11 +937,13 @@ export default function App() {
                       const boundDevice = client.registered_ip ? client.registered_ip.trim() : null;
                       const proxyDetails = parseProxyDetails(client);
 
-                      const quotaMb = client.quota_mb && client.quota_mb > 0 ? client.quota_mb : 500;
+                      const quotaMb = client.quota_mb && client.quota_mb > 0 ? client.quota_mb : 0;
                       const usedMb = client.used_mb && client.used_mb >= 0 ? client.used_mb : 0;
-                      const remainingMb = Math.max(0, Number((quotaMb - usedMb).toFixed(1)));
-                      const usagePct = Math.min(100, Math.round((usedMb / quotaMb) * 100));
-                      const isQuotaExhausted = usedMb >= quotaMb;
+                      const remainingMb =
+                        quotaMb > 0 ? Math.max(0, Number((quotaMb - usedMb).toFixed(1))) : 0;
+                      const usagePct =
+                        quotaMb > 0 ? Math.min(100, Math.round((usedMb / quotaMb) * 100)) : 0;
+                      const isQuotaExhausted = quotaMb > 0 && usedMb >= quotaMb;
 
                       const rawHwid = boundDevice
                         ? boundDevice.replace(/^HWID:/i, '').trim()
@@ -1005,8 +956,8 @@ export default function App() {
                       return (
                         <React.Fragment key={client.id}>
                           <tr className="hover:bg-slate-800/25 transition-colors">
-                            {/* 1. Subscriber + Underneath Quota & Usage Progress */}
-                            <td className="py-4 px-5 align-top min-w-[260px]">
+                            {/* 1. Subscriber + Underneath NodeMaven Sub-User Quota & Usage Progress */}
+                            <td className="py-4 px-5 align-top min-w-[265px]">
                               <div className="space-y-2.5">
                                 <div className="flex items-center justify-between gap-2">
                                   <span
@@ -1015,73 +966,82 @@ export default function App() {
                                   >
                                     {client.username}
                                   </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenQuotaModal(client)}
-                                    title="تعديل الكمية المخصصة أو المصروف"
-                                    className="px-2 py-0.5 rounded-md bg-[#070A10] hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-400 hover:text-emerald-400 flex items-center gap-1 transition-colors"
-                                  >
-                                    <SlidersHorizontal className="w-3 h-3" />
-                                    <span>مخصصات البيانات</span>
-                                  </button>
-                                </div>
-
-                                {/* Data Quota & Consumption Card Under Subscriber */}
-                                <div className="bg-[#070A10]/90 border border-slate-800/90 rounded-xl p-2.5 space-y-1.5">
-                                  <div className="flex items-center justify-between text-[11px]">
-                                    <span className="text-slate-400 flex items-center gap-1">
-                                      <HardDrive className="w-3 h-3 text-emerald-400" />
-                                      <span>المصروف / المخصص:</span>
-                                    </span>
+                                  {proxyDetails.subUser && (
                                     <span
-                                      className="font-mono tabular-nums font-semibold text-slate-200"
+                                      className="px-2 py-0.5 rounded-md bg-[#070A10] border border-slate-800 text-[10px] font-mono text-sky-400"
                                       dir="ltr"
                                     >
-                                      {formatDataMb(usedMb)} / {formatDataMb(quotaMb)}
+                                      NodeMaven · {proxyDetails.subUser}
                                     </span>
-                                  </div>
+                                  )}
+                                </div>
 
-                                  <div className="w-full h-1.5 bg-slate-800/90 rounded-full overflow-hidden">
-                                    <div
-                                      className={`h-full rounded-full transition-all duration-300 ${
-                                        usagePct >= 90
-                                          ? 'bg-rose-500'
-                                          : usagePct >= 75
-                                          ? 'bg-amber-400'
-                                          : 'bg-emerald-500'
-                                      }`}
-                                      style={{ width: `${usagePct}%` }}
-                                    />
-                                  </div>
-
-                                  <div className="flex items-center justify-between text-[10px] text-slate-400">
-                                    <span>
-                                      {isQuotaExhausted ? (
-                                        <span className="text-rose-400 font-semibold">
-                                          انتهت الباقة المخصصة
+                                {/* NodeMaven Live Quota & Consumption Card Under Subscriber */}
+                                <div className="bg-[#070A10]/90 border border-slate-800/90 rounded-xl p-2.5 space-y-1.5">
+                                  {quotaMb > 0 ? (
+                                    <>
+                                      <div className="flex items-center justify-between text-[11px]">
+                                        <span className="text-slate-400 flex items-center gap-1">
+                                          <HardDrive className="w-3 h-3 text-emerald-400" />
+                                          <span>المصروف / المخصص:</span>
                                         </span>
-                                      ) : (
-                                        <>
-                                          متبقي:{' '}
-                                          <strong className="text-emerald-400 font-mono" dir="ltr">
-                                            {formatDataMb(remainingMb)}
-                                          </strong>
-                                        </>
-                                      )}
-                                    </span>
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-mono tabular-nums">{usagePct}%</span>
-                                      {usedMb > 0 && (
-                                        <button
-                                          type="button"
-                                          onClick={() => handleUpdateClientQuota(client, quotaMb, 0)}
-                                          className="text-sky-400 hover:text-sky-300 underline"
+                                        <span
+                                          className="font-mono tabular-nums font-semibold text-slate-200"
+                                          dir="ltr"
                                         >
-                                          تصفير
-                                        </button>
-                                      )}
+                                          {formatDataMb(usedMb)} / {formatDataMb(quotaMb)}
+                                        </span>
+                                      </div>
+
+                                      <div className="w-full h-1.5 bg-slate-800/90 rounded-full overflow-hidden">
+                                        <div
+                                          className={`h-full rounded-full transition-all duration-300 ${
+                                            usagePct >= 90
+                                              ? 'bg-rose-500'
+                                              : usagePct >= 75
+                                              ? 'bg-amber-400'
+                                              : 'bg-emerald-500'
+                                          }`}
+                                          style={{ width: `${usagePct}%` }}
+                                        />
+                                      </div>
+
+                                      <div className="flex items-center justify-between text-[10px] text-slate-400">
+                                        <span>
+                                          {isQuotaExhausted ? (
+                                            <span className="text-rose-400 font-semibold">
+                                              انتهت الباقة المخصصة في NodeMaven
+                                            </span>
+                                          ) : (
+                                            <>
+                                              متبقي:{' '}
+                                              <strong
+                                                className="text-emerald-400 font-mono"
+                                                dir="ltr"
+                                              >
+                                                {formatDataMb(remainingMb)}
+                                              </strong>
+                                            </>
+                                          )}
+                                        </span>
+                                        <span className="font-mono tabular-nums">{usagePct}%</span>
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400 py-0.5">
+                                      <span className="flex items-center gap-1.5">
+                                        <HardDrive className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                        <span>
+                                          {nodeMavenConnected
+                                            ? 'مفتوح في NodeMaven (بدون حد)'
+                                            : `مخصصات NodeMaven (${proxyDetails.subUser || client.username})`}
+                                        </span>
+                                      </span>
+                                      <span className="text-[10px] font-mono text-amber-400">
+                                        {nodeMavenConnected ? '∞' : 'بانتظار API Key'}
+                                      </span>
                                     </div>
-                                  </div>
+                                  )}
                                 </div>
                               </div>
                             </td>
@@ -1356,10 +1316,12 @@ export default function App() {
                 const boundDevice = client.registered_ip ? client.registered_ip.trim() : null;
                 const proxyDetails = parseProxyDetails(client);
 
-                const quotaMb = client.quota_mb && client.quota_mb > 0 ? client.quota_mb : 500;
+                const quotaMb = client.quota_mb && client.quota_mb > 0 ? client.quota_mb : 0;
                 const usedMb = client.used_mb && client.used_mb >= 0 ? client.used_mb : 0;
-                const remainingMb = Math.max(0, Number((quotaMb - usedMb).toFixed(1)));
-                const usagePct = Math.min(100, Math.round((usedMb / quotaMb) * 100));
+                const remainingMb =
+                  quotaMb > 0 ? Math.max(0, Number((quotaMb - usedMb).toFixed(1))) : 0;
+                const usagePct =
+                  quotaMb > 0 ? Math.min(100, Math.round((usedMb / quotaMb) * 100)) : 0;
 
                 return (
                   <div
@@ -1422,55 +1384,54 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Data Quota & Consumption Bar Underneath Mobile Subscriber Header */}
+                    {/* NodeMaven Quota & Consumption Bar Underneath Mobile Subscriber Header */}
                     <div className="bg-[#070A10] border border-slate-800/90 rounded-xl p-3 space-y-1.5">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-slate-400 flex items-center gap-1.5">
-                          <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>المصروف / المخصص:</span>
-                        </span>
-                        <span className="font-mono font-bold text-slate-100" dir="ltr">
-                          {formatDataMb(usedMb)} / {formatDataMb(quotaMb)}
-                        </span>
-                      </div>
-                      <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
-                        <div
-                          className={`h-full rounded-full ${
-                            usagePct >= 90
-                              ? 'bg-rose-500'
-                              : usagePct >= 75
-                              ? 'bg-amber-400'
-                              : 'bg-emerald-500'
-                          }`}
-                          style={{ width: `${usagePct}%` }}
-                        />
-                      </div>
-                      <div className="flex items-center justify-between text-[11px] text-slate-400 pt-0.5">
-                        <span>
-                          متبقي:{' '}
-                          <strong className="text-emerald-400 font-mono" dir="ltr">
-                            {formatDataMb(remainingMb)}
-                          </strong>
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenQuotaModal(client)}
-                            className="text-emerald-400 font-medium underline"
-                          >
-                            تعديل المخصصات
-                          </button>
-                          {usedMb > 0 && (
-                            <button
-                              type="button"
-                              onClick={() => handleUpdateClientQuota(client, quotaMb, 0)}
-                              className="text-sky-400 font-medium underline"
-                            >
-                              تصفير
-                            </button>
-                          )}
+                      {quotaMb > 0 ? (
+                        <>
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-slate-400 flex items-center gap-1.5">
+                              <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>NodeMaven ({proxyDetails.subUser || client.username}):</span>
+                            </span>
+                            <span className="font-mono font-bold text-slate-100" dir="ltr">
+                              {formatDataMb(usedMb)} / {formatDataMb(quotaMb)}
+                            </span>
+                          </div>
+                          <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${
+                                usagePct >= 90
+                                  ? 'bg-rose-500'
+                                  : usagePct >= 75
+                                  ? 'bg-amber-400'
+                                  : 'bg-emerald-500'
+                              }`}
+                              style={{ width: `${usagePct}%` }}
+                            />
+                          </div>
+                          <div className="flex items-center justify-between text-[11px] text-slate-400 pt-0.5">
+                            <span>
+                              متبقي:{' '}
+                              <strong className="text-emerald-400 font-mono" dir="ltr">
+                                {formatDataMb(remainingMb)}
+                              </strong>
+                            </span>
+                            <span className="font-mono tabular-nums">{usagePct}%</span>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex items-center justify-between text-xs text-slate-400">
+                          <span className="flex items-center gap-1.5">
+                            <HardDrive className="w-3.5 h-3.5 text-sky-400" />
+                            <span>
+                              مخصصات NodeMaven ({proxyDetails.subUser || client.username})
+                            </span>
+                          </span>
+                          <span className="text-[11px] font-mono text-amber-400">
+                            {nodeMavenConnected ? 'مفتوح' : 'بانتظار API Key'}
+                          </span>
                         </div>
-                      </div>
+                      )}
                     </div>
 
                     {/* Redesigned Mobile Info Grid (Expiry, Proxy, Device) */}
@@ -1624,121 +1585,6 @@ export default function App() {
                     </div>
                   </div>
                   <Copy className="w-4 h-4 text-slate-500 group-hover:text-sky-400" />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Quick Quota & Usage Adjustment Modal */}
-      {quotaEditClient && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="w-full max-w-md bg-[#0E131F] border border-slate-800/90 rounded-2xl shadow-2xl overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800/80">
-              <div className="flex items-center gap-2">
-                <HardDrive className="w-4 h-4 text-emerald-400" />
-                <h3 className="text-sm font-bold text-white">
-                  مخصصات واستهلاك البيانات · {quotaEditClient.username}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setQuotaEditClient(null)}
-                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800/80 rounded-lg transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-4">
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-medium text-slate-300">
-                    الكمية المخصصة للمشترك (بالميجابايت MB)
-                  </label>
-                  <div className="flex items-center gap-1">
-                    {[
-                      { label: '100MB', val: 100 },
-                      { label: '250MB', val: 250 },
-                      { label: '500MB', val: 500 },
-                      { label: '1GB', val: 1024 },
-                      { label: '2GB', val: 2048 },
-                    ].map((preset) => (
-                      <button
-                        key={preset.val}
-                        type="button"
-                        onClick={() => setQuickQuotaMb(String(preset.val))}
-                        className={`px-2 py-0.5 text-[10px] font-mono rounded border transition-colors ${
-                          Number(quickQuotaMb) === preset.val
-                            ? 'bg-emerald-950 border-emerald-600 text-emerald-300'
-                            : 'bg-[#070A10] border-slate-800 text-slate-400 hover:text-slate-200'
-                        }`}
-                      >
-                        {preset.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <input
-                  type="number"
-                  min={1}
-                  value={quickQuotaMb}
-                  onChange={(e) => setQuickQuotaMb(e.target.value)}
-                  dir="ltr"
-                  className="w-full bg-[#070A10] border border-slate-800 focus:border-emerald-500 rounded-xl px-3.5 py-2 text-sm text-white font-mono focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-medium text-slate-300">
-                    كم صرف منها حتى الآن (بالميجابايت MB)
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setQuickUsedMb('0')}
-                    className="text-[11px] text-sky-400 hover:text-sky-300 underline"
-                  >
-                    تصفير العداد (0 MB)
-                  </button>
-                </div>
-                <input
-                  type="number"
-                  min={0}
-                  step="0.1"
-                  value={quickUsedMb}
-                  onChange={(e) => setQuickUsedMb(e.target.value)}
-                  dir="ltr"
-                  className="w-full bg-[#070A10] border border-slate-800 focus:border-emerald-500 rounded-xl px-3.5 py-2 text-sm text-white font-mono focus:outline-none"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800/80">
-                <button
-                  type="button"
-                  onClick={() => setQuotaEditClient(null)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-300 bg-slate-800/90 hover:bg-slate-800 rounded-xl transition-colors"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="button"
-                  disabled={savingQuota}
-                  onClick={() =>
-                    handleUpdateClientQuota(
-                      quotaEditClient,
-                      Number(quickQuotaMb) || 500,
-                      Number(quickUsedMb) || 0
-                    )
-                  }
-                  className="px-5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-colors"
-                >
-                  {savingQuota ? 'جاري الحفظ...' : 'حفظ المخصصات'}
                 </button>
               </div>
             </div>

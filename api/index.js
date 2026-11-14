@@ -210,20 +210,24 @@ function parseStoredProxyHost(rawProxyHost, fallbackUser = '', fallbackPass = ''
   return { host, pUser, pPass, quotaMb, usedMb, subUserPrefix };
 }
 
-// Optional NodeMaven live sub-user usage fetcher (when NODEMAVEN_API_KEY is configured in env)
+// NodeMaven live sub-user usage fetcher (queries https://api.nodemaven.com/api/v2/base/sub-users/)
 async function fetchNodeMavenSubUsersMap() {
-  const apiKey = process.env.NODEMAVEN_API_KEY || '';
-  if (!apiKey) return null;
+  const rawKey = (process.env.NODEMAVEN_API_KEY || '').trim();
+  if (!rawKey) return null;
+  const cleanKey = rawKey.replace(/^x-api-key\s+/i, '').trim();
 
   try {
-    const res = await fetch('https://api.nodemaven.com/api/v2/base/sub-users/', {
+    const res = await fetch('https://api.nodemaven.com/api/v2/base/sub-users/?limit=100', {
       method: 'GET',
       headers: {
-        Authorization: `x-api-key ${apiKey}`,
+        Authorization: `x-api-key ${cleanKey}`,
         Accept: 'application/json',
       },
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.error('[NODEMAVEN] API responded with status:', res.status);
+      return null;
+    }
     const data = await res.json();
     const list = Array.isArray(data)
       ? data
@@ -231,16 +235,22 @@ async function fetchNodeMavenSubUsersMap() {
         ? data.results
         : Array.isArray(data?.data)
           ? data.data
-          : [];
+          : Array.isArray(data?.sub_users)
+            ? data.sub_users
+            : [];
     const map = {};
     for (const item of list) {
       const u = String(item.proxy_username || item.username || '').trim().toLowerCase();
       if (u) {
+        const limitBytes = Number(item.traffic_limit ?? 0);
+        const usedBytes = Number(item.used_traffic ?? item.traffic_used ?? 0);
         map[u] = {
           id: item.id,
           proxy_username: item.proxy_username || item.username,
-          traffic_limit_bytes: Number(item.traffic_limit ?? 0),
-          traffic_used_bytes: Number(item.used_traffic ?? item.traffic_used ?? 0),
+          traffic_limit_bytes: limitBytes,
+          traffic_used_bytes: usedBytes,
+          traffic_limit_mb: Number((limitBytes / (1024 * 1024)).toFixed(2)),
+          traffic_used_mb: Number((usedBytes / (1024 * 1024)).toFixed(2)),
           is_traffic_limited: Boolean(item.is_traffic_limited),
         };
       }
@@ -579,14 +589,18 @@ async function handleSubscriptionRequest(req, res) {
 app.get('/sub/:username', handleSubscriptionRequest);
 app.get('/api/sub/:username', handleSubscriptionRequest);
 
-// Optional NodeMaven Live Traffic Sync Endpoint for Admin Dashboard
-app.get('/api/nodemaven/usage', async (_req, res) => {
+// NodeMaven Live Traffic Sync Endpoint for Admin Dashboard
+async function handleNodeMavenUsage(_req, res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   const map = await fetchNodeMavenSubUsersMap();
   return res.json({
     connected: Boolean(map),
     sub_users: map || {},
   });
-});
+}
+
+app.get('/nodemaven/usage', handleNodeMavenUsage);
+app.get('/api/nodemaven/usage', handleNodeMavenUsage);
 
 // ============================================================
 // 2. HAPP ENCRYPTED LINK GENERATOR: GET /happ/:username

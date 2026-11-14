@@ -37,7 +37,7 @@ export function normalizeProxyClient(raw: ProxyClient): ProxyClient {
   let host = String(raw.proxy_host || '').trim();
   let pUser = raw.proxy_username ? String(raw.proxy_username).trim() : null;
   let pPass = raw.proxy_password ? String(raw.proxy_password).trim() : null;
-  let quotaMb = typeof raw.quota_mb === 'number' ? raw.quota_mb : 500;
+  let quotaMb = typeof raw.quota_mb === 'number' ? raw.quota_mb : 0;
   let usedMb = typeof raw.used_mb === 'number' ? raw.used_mb : 0;
 
   if (host.includes('#')) {
@@ -77,7 +77,7 @@ export function normalizeProxyClient(raw: ProxyClient): ProxyClient {
 }
 
 /**
- * Packs "user:pass@host#limit=500&used=12.5" into proxy_host when saving to Supabase.
+ * Packs "user:pass@host" into proxy_host when saving to Supabase.
  */
 export function packProxyHostWithAuth(
   host: string,
@@ -92,11 +92,12 @@ export function packProxyHostWithAuth(
     .replace(/^.*@/, '');
   const u = username ? username.trim() : '';
   const p = password ? password.trim() : '';
-  const limitVal = typeof quotaMb === 'number' && !Number.isNaN(quotaMb) ? quotaMb : 500;
-  const usedVal = typeof usedMb === 'number' && !Number.isNaN(usedMb) ? Number(usedMb.toFixed(2)) : 0;
-
   const base = u && p ? `${u}:${p}@${cleanHost}` : cleanHost;
-  return `${base}#limit=${limitVal}&used=${usedVal}`;
+  if (typeof quotaMb === 'number' && quotaMb > 0) {
+    const usedVal = typeof usedMb === 'number' && !Number.isNaN(usedMb) ? Number(usedMb.toFixed(2)) : 0;
+    return `${base}#limit=${quotaMb}&used=${usedVal}`;
+  }
+  return base;
 }
 
 export function formatDataMb(mb: number = 0): string {
