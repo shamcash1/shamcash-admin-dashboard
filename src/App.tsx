@@ -37,6 +37,7 @@ import {
   packProxyHostWithAuth,
   formatDataMb,
   parseProxyDetails,
+  regenerateNodeMavenProxyUsername,
   buildCustomerActivationMessage,
   HAPP_IOS_URL,
   HAPP_ANDROID_APK_URL,
@@ -98,6 +99,8 @@ export default function App() {
   const [nodeMavenMap, setNodeMavenMap] = useState<Record<string, NodeMavenSubUserUsage>>({});
   const [nodeMavenConnected, setNodeMavenConnected] = useState<boolean>(false);
   const [nodeMavenAccountMb, setNodeMavenAccountMb] = useState<number | null>(null);
+  const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  const [justRegeneratedId, setJustRegeneratedId] = useState<string | null>(null);
 
   // Modals state
   const [modalOpen, setModalOpen] = useState<boolean>(false);
@@ -540,6 +543,93 @@ export default function App() {
     setLocalDelta(nextDelta);
     saveLocalDelta(nextDelta);
     showToast(`تم فك قفل الجهاز · ${client.username}`);
+  };
+
+  // Regenerate NodeMaven Proxy Username (New Sticky IP Session for the Same Sub-User & Same Password)
+  const handleRegenerateProxy = async (client: ProxyClient) => {
+    if (regeneratingId === client.id) return;
+    setRegeneratingId(client.id);
+
+    try {
+      const { newProxyUsername, newSessionId } = regenerateNodeMavenProxyUsername(
+        client.proxy_username,
+        client.username
+      );
+      const packedHost = packProxyHostWithAuth(
+        client.proxy_host,
+        newProxyUsername,
+        client.proxy_password,
+        client.quota_mb,
+        client.used_mb
+      );
+
+      const { data, error } = await supabase
+        .from('proxy_clients')
+        .update({
+          proxy_host: packedHost,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', client.id)
+        .select();
+
+      if (!error && data && data.length > 0) {
+        const updated = normalizeProxyClient(data[0] as ProxyClient);
+        setRemoteClients((prev) => prev.map((c) => (c.id === client.id ? updated : c)));
+        if (localDelta.upserted[client.id]) {
+          const nextUpserted = { ...localDelta.upserted };
+          delete nextUpserted[client.id];
+          const nextDelta = { ...localDelta, upserted: nextUpserted };
+          setLocalDelta(nextDelta);
+          saveLocalDelta(nextDelta);
+        }
+      } else {
+        const updatedFallback: ProxyClient = {
+          ...client,
+          proxy_username: newProxyUsername,
+          updated_at: new Date().toISOString(),
+        };
+        const nextDelta: LocalDeltaState = {
+          ...localDelta,
+          upserted: { ...localDelta.upserted, [client.id]: updatedFallback },
+        };
+        setLocalDelta(nextDelta);
+        saveLocalDelta(nextDelta);
+      }
+
+      setJustRegeneratedId(client.id);
+      setTimeout(() => {
+        setJustRegeneratedId((prev) => (prev === client.id ? null : prev));
+      }, 3500);
+      showToast(`تم إعادة توليد البروكسي لـ ${client.username} (sid-${newSessionId})`);
+    } finally {
+      setRegeneratingId(null);
+    }
+  };
+
+  const renderProxyStringWithHighlightedSid = (rawUsername: string, isHighlighted: boolean) => {
+    if (!rawUsername) {
+      return <span className="text-slate-500">بدون اسم بروكسي</span>;
+    }
+    const match = rawUsername.match(/^(.*?-sid-)([a-zA-Z0-9]+)(.*)$/i);
+    if (!match) {
+      return <span className="text-slate-200">{rawUsername}</span>;
+    }
+    const [, beforeSid, sidValue, afterSid] = match;
+    return (
+      <>
+        <span className="text-slate-300">{beforeSid}</span>
+        <span
+          className={`px-1 py-0.5 rounded font-bold transition-colors ${
+            isHighlighted
+              ? 'bg-emerald-500 text-slate-950'
+              : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+          }`}
+        >
+          {sidValue}
+        </span>
+        <span className="text-slate-400">{afterSid}</span>
+      </>
+    );
   };
 
   // Toggle Active
@@ -1143,9 +1233,15 @@ export default function App() {
                               </div>
                             </td>
 
-                            {/* 4. Professional Proxy Server Card Cell */}
+                            {/* 4. Professional Proxy Server Card Cell + Instant Regenerate Proxy Button */}
                             <td className="py-4 px-4 align-middle whitespace-nowrap">
-                              <div className="inline-flex flex-col gap-1.5 bg-[#070A10] border border-slate-800/90 rounded-xl px-3 py-2 min-w-[215px]">
+                              <div
+                                className={`inline-flex flex-col gap-2 bg-[#070A10] border rounded-xl px-3 py-2.5 min-w-[330px] max-w-[420px] transition-colors ${
+                                  justRegeneratedId === client.id
+                                    ? 'border-emerald-500/90 shadow-md shadow-emerald-950/50'
+                                    : 'border-slate-800/90'
+                                }`}
+                              >
                                 <div className="flex items-center justify-between gap-2">
                                   <div
                                     className="inline-flex items-center gap-1.5 font-mono text-xs font-semibold tabular-nums text-slate-100"
@@ -1156,34 +1252,58 @@ export default function App() {
                                       {proxyDetails.cleanHost}:{client.proxy_port}
                                     </span>
                                   </div>
-                                  <span className="px-1.5 py-0.5 rounded-md bg-emerald-950/70 border border-emerald-800/60 text-[10px] font-mono font-bold text-emerald-300">
-                                    SY 🇸🇾
-                                  </span>
-                                </div>
-
-                                <div className="flex items-center justify-between gap-2 text-[11px] pt-1 border-t border-slate-800/70">
-                                  {proxyDetails.subUser ? (
-                                    <span
-                                      className="font-mono text-sky-400 font-medium truncate max-w-[125px]"
-                                      dir="ltr"
-                                      title={client.proxy_username || ''}
-                                    >
-                                      👤 {proxyDetails.subUser}
-                                    </span>
-                                  ) : (
-                                    <span className="text-slate-500">بدون مصادقة</span>
-                                  )}
-
-                                  <div className="flex items-center gap-1" dir="ltr">
-                                    {proxyDetails.sessionId && (
-                                      <span className="px-1.5 py-0.5 rounded bg-slate-800/90 text-[10px] font-mono text-slate-300">
-                                        #{proxyDetails.sessionId.slice(0, 6)}
+                                  <div className="flex items-center gap-1.5">
+                                    {proxyDetails.subUser && (
+                                      <span
+                                        className="px-1.5 py-0.5 rounded-md bg-sky-950/60 border border-sky-800/60 text-[10px] font-mono text-sky-300"
+                                        dir="ltr"
+                                      >
+                                        👤 {proxyDetails.subUser}
                                       </span>
                                     )}
-                                    {proxyDetails.hasAuth && (
-                                      <Lock className="w-3 h-3 text-emerald-400 shrink-0" />
+                                    <span className="px-1.5 py-0.5 rounded-md bg-emerald-950/70 border border-emerald-800/60 text-[10px] font-mono font-bold text-emerald-300">
+                                      {proxyDetails.countryCode || 'SY'} 🇸🇾
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Full Proxy Username Display + Instant Regenerate Button Right in Front */}
+                                <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80">
+                                  <div
+                                    className="flex-1 min-w-0 bg-[#0B0F19] border border-slate-800/90 rounded-lg px-2.5 py-1.5 font-mono text-[11px] overflow-x-auto scrollbar-none whitespace-nowrap"
+                                    dir="ltr"
+                                    title={proxyDetails.fullProxyUsername}
+                                  >
+                                    {renderProxyStringWithHighlightedSid(
+                                      proxyDetails.fullProxyUsername,
+                                      justRegeneratedId === client.id
                                     )}
                                   </div>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRegenerateProxy(client)}
+                                    disabled={regeneratingId === client.id}
+                                    title="إعادة توليد البروكسي لنفس المستخدم (تغيير الـ IP مع بقاء كلمة المرور كما هي)"
+                                    className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 shrink-0 border transition-all ${
+                                      justRegeneratedId === client.id
+                                        ? 'bg-emerald-600 border-emerald-400 text-white'
+                                        : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/70'
+                                    }`}
+                                  >
+                                    <RefreshCw
+                                      className={`w-3.5 h-3.5 ${
+                                        regeneratingId === client.id ? 'animate-spin' : ''
+                                      }`}
+                                    />
+                                    <span>
+                                      {regeneratingId === client.id
+                                        ? 'يتولد...'
+                                        : justRegeneratedId === client.id
+                                        ? 'تغير البروكسي ✓'
+                                        : 'إعادة توليد'}
+                                    </span>
+                                  </button>
                                 </div>
                               </div>
                             </td>
@@ -1470,6 +1590,54 @@ export default function App() {
                       )}
                     </div>
 
+                    {/* Mobile Proxy Name Display + Instant Regenerate Button */}
+                    <div
+                      className={`bg-[#070A10] border rounded-xl p-2.5 space-y-2 transition-colors ${
+                        justRegeneratedId === client.id
+                          ? 'border-emerald-500/90'
+                          : 'border-slate-800/90'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-medium text-slate-400 flex items-center gap-1.5">
+                          <Server className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>اسم البروكسي (NodeMaven):</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleRegenerateProxy(client)}
+                          disabled={regeneratingId === client.id}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 border transition-all ${
+                            justRegeneratedId === client.id
+                              ? 'bg-emerald-600 border-emerald-400 text-white'
+                              : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/70'
+                          }`}
+                        >
+                          <RefreshCw
+                            className={`w-3 h-3 ${
+                              regeneratingId === client.id ? 'animate-spin' : ''
+                            }`}
+                          />
+                          <span>
+                            {regeneratingId === client.id
+                              ? 'يتولد...'
+                              : justRegeneratedId === client.id
+                              ? 'تغير البروكسي ✓'
+                              : 'إعادة توليد'}
+                          </span>
+                        </button>
+                      </div>
+                      <div
+                        className="bg-[#0B0F19] border border-slate-800/90 rounded-lg px-2.5 py-1.5 font-mono text-[11px] overflow-x-auto whitespace-nowrap"
+                        dir="ltr"
+                      >
+                        {renderProxyStringWithHighlightedSid(
+                          proxyDetails.fullProxyUsername,
+                          justRegeneratedId === client.id
+                        )}
+                      </div>
+                    </div>
+
                     {/* Redesigned Mobile Info Grid (Expiry, Proxy, Device) */}
                     <div className="grid grid-cols-3 gap-2 text-xs">
                       <div className="bg-[#070A10] border border-slate-800/80 rounded-xl p-2.5">
@@ -1483,7 +1651,7 @@ export default function App() {
                       </div>
                       <div className="bg-[#070A10] border border-slate-800/80 rounded-xl p-2.5">
                         <span className="text-slate-500 text-[11px] block">
-                          البروكسي {proxyDetails.subUser ? `(${proxyDetails.subUser})` : ''}
+                          الخادم {proxyDetails.subUser ? `(${proxyDetails.subUser})` : ''}
                         </span>
                         <span
                           className="font-mono font-semibold tabular-nums text-slate-100 mt-0.5 block truncate"

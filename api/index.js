@@ -1,3 +1,4 @@
+// VPN ALISHOP - Strict Sham Cash Only Subscription & Routing API
 import express from 'express';
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';

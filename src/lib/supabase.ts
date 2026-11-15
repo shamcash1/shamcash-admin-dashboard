@@ -109,6 +109,78 @@ export function formatDataMb(mb: number = 0): string {
   return `${mb % 1 === 0 ? mb.toFixed(0) : mb.toFixed(1)} MB`;
 }
 
+export function generateNodeMavenSessionId(excludeSid?: string | null): string {
+  const makeSid = (): string => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID().replace(/-/g, '').slice(0, 13).toLowerCase();
+    }
+    const hex = '0123456789abcdef';
+    let out = '';
+    for (let i = 0; i < 12; i++) {
+      out += hex[Math.floor(Math.random() * 16)];
+    }
+    return `${out}4`;
+  };
+
+  let nextSid = makeSid();
+  let guard = 0;
+  while (excludeSid && nextSid.toLowerCase() === excludeSid.toLowerCase() && guard < 10) {
+    nextSid = makeSid();
+    guard++;
+  }
+  return nextSid;
+}
+
+/**
+ * Regenerates the NodeMaven proxy username for the same sub-user by replacing the sticky session ID (-sid-...)
+ * while preserving the sub-user name, country, mobile/residential type, filter, norotate flags, and password.
+ */
+export function regenerateNodeMavenProxyUsername(
+  currentProxyUsername?: string | null,
+  fallbackSubUser?: string
+): {
+  newProxyUsername: string;
+  newSessionId: string;
+  oldSessionId: string | null;
+} {
+  const raw = (currentProxyUsername || '').trim();
+  const sidMatch = raw.match(/-sid-([a-zA-Z0-9]+)/i);
+  const oldSessionId = sidMatch ? sidMatch[1] : null;
+  const newSessionId = generateNodeMavenSessionId(oldSessionId);
+
+  if (!raw) {
+    const cleanFallback = (fallbackSubUser || 'user').trim().replace(/\s+/g, '');
+    return {
+      newProxyUsername: `${cleanFallback}-country-sy-sid-${newSessionId}-filter-medium-norotate-true`,
+      newSessionId,
+      oldSessionId: null,
+    };
+  }
+
+  if (sidMatch) {
+    const newProxyUsername = raw.replace(/-sid-[a-zA-Z0-9]+/i, `-sid-${newSessionId}`);
+    return {
+      newProxyUsername,
+      newSessionId,
+      oldSessionId,
+    };
+  }
+
+  if (raw.includes('-country-')) {
+    return {
+      newProxyUsername: `${raw}-sid-${newSessionId}-filter-medium-norotate-true`,
+      newSessionId,
+      oldSessionId: null,
+    };
+  }
+
+  return {
+    newProxyUsername: `${raw}-country-sy-sid-${newSessionId}-filter-medium-norotate-true`,
+    newSessionId,
+    oldSessionId: null,
+  };
+}
+
 export function parseProxyDetails(client: ProxyClient): {
   cleanHost: string;
   subUser: string | null;
@@ -116,6 +188,7 @@ export function parseProxyDetails(client: ProxyClient): {
   countryCode: string | null;
   isNodeMaven: boolean;
   hasAuth: boolean;
+  fullProxyUsername: string;
 } {
   const cleanHost = String(client.proxy_host || '').replace(/#.*$/, '').replace(/^.*@/, '').trim();
   const rawUser = client.proxy_username ? String(client.proxy_username).trim() : '';
@@ -130,6 +203,7 @@ export function parseProxyDetails(client: ProxyClient): {
       countryCode: null,
       isNodeMaven,
       hasAuth,
+      fullProxyUsername: '',
     };
   }
 
@@ -141,9 +215,9 @@ export function parseProxyDetails(client: ProxyClient): {
     subUser = rawUser.split('-country-')[0].trim();
     const countryMatch = rawUser.match(/-country-([a-zA-Z]{2})/i);
     if (countryMatch) countryCode = countryMatch[1].toUpperCase();
-    const sidMatch = rawUser.match(/-sid-([a-zA-Z0-9]+)/i);
-    if (sidMatch) sessionId = sidMatch[1].slice(0, 8);
   }
+  const sidMatch = rawUser.match(/-sid-([a-zA-Z0-9]+)/i);
+  if (sidMatch) sessionId = sidMatch[1];
 
   return {
     cleanHost,
@@ -152,6 +226,7 @@ export function parseProxyDetails(client: ProxyClient): {
     countryCode,
     isNodeMaven,
     hasAuth,
+    fullProxyUsername: rawUser,
   };
 }
 
