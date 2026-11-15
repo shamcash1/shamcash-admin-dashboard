@@ -58,11 +58,21 @@ interface LocalDeltaState {
 interface NodeMavenSubUserUsage {
   id?: string;
   proxy_username: string;
+  proxy_password?: string;
   traffic_limit_bytes: number;
   traffic_used_bytes: number;
   traffic_limit_mb: number;
   traffic_used_mb: number;
   is_traffic_limited: boolean;
+}
+
+interface VerifiedProxyIpInfo {
+  ok: boolean;
+  exit_ip?: string;
+  city?: string;
+  region?: string;
+  isp?: string;
+  country_code?: string;
 }
 
 function loadLocalDelta(): LocalDeltaState {
@@ -100,7 +110,9 @@ export default function App() {
   const [nodeMavenConnected, setNodeMavenConnected] = useState<boolean>(false);
   const [nodeMavenAccountMb, setNodeMavenAccountMb] = useState<number | null>(null);
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  const [checkingIpId, setCheckingIpId] = useState<string | null>(null);
   const [justRegeneratedId, setJustRegeneratedId] = useState<string | null>(null);
+  const [verifiedIpMap, setVerifiedIpMap] = useState<Record<string, VerifiedProxyIpInfo>>({});
 
   // Modals state
   const [modalOpen, setModalOpen] = useState<boolean>(false);
@@ -545,23 +557,123 @@ export default function App() {
     showToast(`تم فك قفل الجهاز · ${client.username}`);
   };
 
-  // Regenerate NodeMaven Proxy Username (New Sticky IP Session for the Same Sub-User & Same Password)
+  // Check Live Exit IP on NodeMaven Gateway (gate.nodemaven.com)
+  const handleCheckProxyIp = async (client: ProxyClient) => {
+    if (checkingIpId === client.id) return;
+    setCheckingIpId(client.id);
+
+    const endpoints = [
+      '/api/nodemaven/check-proxy',
+      'https://shamcash-proxy-api.vercel.app/api/nodemaven/check-proxy',
+    ];
+
+    try {
+      for (const url of endpoints) {
+        try {
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              proxy_username: client.proxy_username,
+              proxy_password: client.proxy_password,
+              proxy_host: client.proxy_host,
+            }),
+          });
+          if (!res.ok) continue;
+          const data = await res.json();
+          if (data?.ok && data?.exit_ip) {
+            setVerifiedIpMap((prev) => ({
+              ...prev,
+              [client.id]: {
+                ok: true,
+                exit_ip: data.exit_ip,
+                city: data.city,
+                region: data.region,
+                isp: data.isp,
+                country_code: data.country_code,
+              },
+            }));
+            showToast(
+              `الـ IP الفعلي في NodeMaven: ${data.exit_ip} (${data.city || 'SY'} - ${data.isp || ''})`
+            );
+            return;
+          }
+        } catch {
+          // try next endpoint
+        }
+      }
+      showToast('تعذر فحص الـ IP حالياً أو أن جلسة البروكسي تحتاج إعادة توليد');
+    } finally {
+      setCheckingIpId(null);
+    }
+  };
+
+  // Regenerate NodeMaven Proxy Username via Live NodeMaven API + Gateway IP Verification
   const handleRegenerateProxy = async (client: ProxyClient) => {
     if (regeneratingId === client.id) return;
     setRegeneratingId(client.id);
 
+    const previousIp = verifiedIpMap[client.id]?.exit_ip || '';
+    const endpoints = [
+      '/api/nodemaven/regenerate',
+      'https://shamcash-proxy-api.vercel.app/api/nodemaven/regenerate',
+    ];
+
     try {
-      const { newProxyUsername, newSessionId } = regenerateNodeMavenProxyUsername(
-        client.proxy_username,
-        client.username
-      );
-      const packedHost = packProxyHostWithAuth(
-        client.proxy_host,
-        newProxyUsername,
-        client.proxy_password,
-        client.quota_mb,
-        client.used_mb
-      );
+      let apiResult: any = null;
+      for (const url of endpoints) {
+        try {
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              client_id: client.id,
+              username: client.username,
+              proxy_username: client.proxy_username,
+              proxy_password: client.proxy_password,
+              proxy_host: client.proxy_host,
+              quota_mb: client.quota_mb,
+              used_mb: client.used_mb,
+              previous_ip: previousIp,
+            }),
+          });
+          if (res.ok) {
+            const json = await res.json();
+            if (json?.success && json?.new_proxy_username) {
+              apiResult = json;
+              break;
+            }
+          }
+        } catch {
+          // try next endpoint
+        }
+      }
+
+      const subPrefix = String(client.proxy_username || '')
+        .split('-country-')[0]
+        .trim()
+        .toLowerCase();
+      const nmSub = subPrefix ? nodeMavenMap[subPrefix] : undefined;
+
+      const newProxyUsername =
+        apiResult?.new_proxy_username ||
+        regenerateNodeMavenProxyUsername(
+          client.proxy_username,
+          nmSub?.proxy_username || client.username
+        ).newProxyUsername;
+
+      const officialPassword =
+        apiResult?.proxy_password || nmSub?.proxy_password || client.proxy_password;
+
+      const packedHost =
+        apiResult?.packed_host ||
+        packProxyHostWithAuth(
+          client.proxy_host,
+          newProxyUsername,
+          officialPassword,
+          client.quota_mb,
+          client.used_mb
+        );
 
       const { data, error } = await supabase
         .from('proxy_clients')
@@ -586,6 +698,7 @@ export default function App() {
         const updatedFallback: ProxyClient = {
           ...client,
           proxy_username: newProxyUsername,
+          proxy_password: officialPassword,
           updated_at: new Date().toISOString(),
         };
         const nextDelta: LocalDeltaState = {
@@ -596,11 +709,32 @@ export default function App() {
         saveLocalDelta(nextDelta);
       }
 
+      if (apiResult?.live_check?.ok && apiResult.live_check.exit_ip) {
+        setVerifiedIpMap((prev) => ({
+          ...prev,
+          [client.id]: {
+            ok: true,
+            exit_ip: apiResult.live_check.exit_ip,
+            city: apiResult.live_check.city,
+            region: apiResult.live_check.region,
+            isp: apiResult.live_check.isp,
+            country_code: apiResult.live_check.country_code,
+          },
+        }));
+      }
+
       setJustRegeneratedId(client.id);
       setTimeout(() => {
         setJustRegeneratedId((prev) => (prev === client.id ? null : prev));
-      }, 3500);
-      showToast(`تم إعادة توليد البروكسي لـ ${client.username} (sid-${newSessionId})`);
+      }, 4000);
+
+      if (apiResult?.live_check?.ok && apiResult.live_check.exit_ip) {
+        showToast(
+          `تم توليد بروكسي جديد من NodeMaven · IP الجديد: ${apiResult.live_check.exit_ip} (${apiResult.live_check.city || 'SY'})`
+        );
+      } else {
+        showToast(`تم إعادة توليد البروكسي ومزامنته مع NodeMaven لـ ${client.username}`);
+      }
     } finally {
       setRegeneratingId(null);
     }
@@ -1268,7 +1402,7 @@ export default function App() {
                                 </div>
 
                                 {/* Full Proxy Username Display + Instant Regenerate Button Right in Front */}
-                                <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80">
+                                <div className="flex items-center justify-between gap-1.5 pt-1.5 border-t border-slate-800/80">
                                   <div
                                     className="flex-1 min-w-0 bg-[#0B0F19] border border-slate-800/90 rounded-lg px-2.5 py-1.5 font-mono text-[11px] overflow-x-auto scrollbar-none whitespace-nowrap"
                                     dir="ltr"
@@ -1282,9 +1416,19 @@ export default function App() {
 
                                   <button
                                     type="button"
+                                    onClick={() => handleCheckProxyIp(client)}
+                                    disabled={checkingIpId === client.id || regeneratingId === client.id}
+                                    title="فحص الـ IP الفعلي الحالي لهذا البروكسي من بوابة NodeMaven"
+                                    className="px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-[#0B0F19] hover:bg-slate-800 text-sky-300 border border-slate-800 shrink-0 transition-colors"
+                                  >
+                                    {checkingIpId === client.id ? 'يفحص...' : 'فحص IP'}
+                                  </button>
+
+                                  <button
+                                    type="button"
                                     onClick={() => handleRegenerateProxy(client)}
                                     disabled={regeneratingId === client.id}
-                                    title="إعادة توليد البروكسي لنفس المستخدم (تغيير الـ IP مع بقاء كلمة المرور كما هي)"
+                                    title="إعادة توليد البروكسي مباشرة من NodeMaven وتفعيل IP جديد مع بقاء كلمة المرور كما هي"
                                     className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 shrink-0 border transition-all ${
                                       justRegeneratedId === client.id
                                         ? 'bg-emerald-600 border-emerald-400 text-white'
@@ -1298,13 +1442,29 @@ export default function App() {
                                     />
                                     <span>
                                       {regeneratingId === client.id
-                                        ? 'يتولد...'
+                                        ? 'يتصل بـ NodeMaven...'
                                         : justRegeneratedId === client.id
                                         ? 'تغير البروكسي ✓'
                                         : 'إعادة توليد'}
                                     </span>
                                   </button>
                                 </div>
+
+                                {/* Live Verified Exit IP & ISP from NodeMaven Gateway */}
+                                {verifiedIpMap[client.id]?.ok && verifiedIpMap[client.id]?.exit_ip && (
+                                  <div className="flex items-center justify-between gap-2 px-2.5 py-1 rounded-lg bg-emerald-950/40 border border-emerald-800/50 text-[11px]">
+                                    <span className="text-emerald-300 font-medium">
+                                      الـ IP الفعلي في NodeMaven:
+                                    </span>
+                                    <span className="font-mono font-bold text-white" dir="ltr">
+                                      {verifiedIpMap[client.id].exit_ip} ·{' '}
+                                      <span className="text-emerald-400 font-normal">
+                                        {verifiedIpMap[client.id].city || 'SY'} (
+                                        {verifiedIpMap[client.id].isp || 'ISP'})
+                                      </span>
+                                    </span>
+                                  </div>
+                                )}
                               </div>
                             </td>
 
@@ -1603,29 +1763,39 @@ export default function App() {
                           <Server className="w-3.5 h-3.5 text-emerald-400" />
                           <span>اسم البروكسي (NodeMaven):</span>
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => handleRegenerateProxy(client)}
-                          disabled={regeneratingId === client.id}
-                          className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 border transition-all ${
-                            justRegeneratedId === client.id
-                              ? 'bg-emerald-600 border-emerald-400 text-white'
-                              : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/70'
-                          }`}
-                        >
-                          <RefreshCw
-                            className={`w-3 h-3 ${
-                              regeneratingId === client.id ? 'animate-spin' : ''
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleCheckProxyIp(client)}
+                            disabled={checkingIpId === client.id || regeneratingId === client.id}
+                            className="px-2 py-1 rounded-lg text-[11px] font-semibold bg-[#0B0F19] text-sky-300 border border-slate-800"
+                          >
+                            {checkingIpId === client.id ? 'يفحص...' : 'فحص IP'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRegenerateProxy(client)}
+                            disabled={regeneratingId === client.id}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 border transition-all ${
+                              justRegeneratedId === client.id
+                                ? 'bg-emerald-600 border-emerald-400 text-white'
+                                : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/70'
                             }`}
-                          />
-                          <span>
-                            {regeneratingId === client.id
-                              ? 'يتولد...'
-                              : justRegeneratedId === client.id
-                              ? 'تغير البروكسي ✓'
-                              : 'إعادة توليد'}
-                          </span>
-                        </button>
+                          >
+                            <RefreshCw
+                              className={`w-3 h-3 ${
+                                regeneratingId === client.id ? 'animate-spin' : ''
+                              }`}
+                            />
+                            <span>
+                              {regeneratingId === client.id
+                                ? 'يتصل بـ NodeMaven...'
+                                : justRegeneratedId === client.id
+                                ? 'تغير البروكسي ✓'
+                                : 'إعادة توليد'}
+                            </span>
+                          </button>
+                        </div>
                       </div>
                       <div
                         className="bg-[#0B0F19] border border-slate-800/90 rounded-lg px-2.5 py-1.5 font-mono text-[11px] overflow-x-auto whitespace-nowrap"
@@ -1636,6 +1806,18 @@ export default function App() {
                           justRegeneratedId === client.id
                         )}
                       </div>
+                      {verifiedIpMap[client.id]?.ok && verifiedIpMap[client.id]?.exit_ip && (
+                        <div className="flex items-center justify-between gap-2 px-2.5 py-1 rounded-lg bg-emerald-950/40 border border-emerald-800/50 text-[11px]">
+                          <span className="text-emerald-300 font-medium">IP الفعلي:</span>
+                          <span className="font-mono font-bold text-white" dir="ltr">
+                            {verifiedIpMap[client.id].exit_ip} ·{' '}
+                            <span className="text-emerald-400 font-normal">
+                              {verifiedIpMap[client.id].city || 'SY'} (
+                              {verifiedIpMap[client.id].isp || 'ISP'})
+                            </span>
+                          </span>
+                        </div>
+                      )}
                     </div>
 
                     {/* Redesigned Mobile Info Grid (Expiry, Proxy, Device) */}

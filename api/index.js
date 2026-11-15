@@ -1,6 +1,7 @@
 // VPN ALISHOP - Strict Sham Cash Only Subscription & Routing API
 import express from 'express';
 import crypto from 'crypto';
+import http from 'http';
 import { createClient } from '@supabase/supabase-js';
 
 // Supabase configuration
@@ -257,6 +258,7 @@ async function fetchNodeMavenSubUsersMap() {
         map[u] = {
           id: item.id,
           proxy_username: item.proxy_username || item.username,
+          proxy_password: item.proxy_password || '',
           is_default_user: Boolean(item.is_default_user),
           traffic_limit_bytes: limitBytes,
           traffic_used_bytes: usedBytes,
@@ -654,6 +656,253 @@ async function handleNodeMavenUsage(_req, res) {
 
 app.get('/nodemaven/usage', handleNodeMavenUsage);
 app.get('/api/nodemaven/usage', handleNodeMavenUsage);
+
+// Helper: Generate 13-hex-char NodeMaven session ID (UUIDv4 prefix ending in 4, identical to NodeMaven dashboard)
+function generateNodeMavenSid(excludeSid = '') {
+  let sid = crypto.randomUUID().replace(/-/g, '').slice(0, 13).toLowerCase();
+  let guard = 0;
+  while (excludeSid && sid === String(excludeSid).toLowerCase() && guard < 10) {
+    sid = crypto.randomUUID().replace(/-/g, '').slice(0, 13).toLowerCase();
+    guard++;
+  }
+  return sid;
+}
+
+// Helper: Build canonical NodeMaven proxy username string synced with official Sub-User name from NodeMaven API
+function buildNodeMavenProxyUsername(rawProxyUsername, officialSubUserName, newSid) {
+  const raw = String(rawProxyUsername || '').trim();
+  const baseSubUser =
+    officialSubUserName ||
+    (raw.includes('-country-') ? raw.split('-country-')[0].trim() : raw) ||
+    'user';
+
+  if (!raw) {
+    return `${baseSubUser}-country-sy-sid-${newSid}-filter-medium-norotate-true`;
+  }
+
+  let updated = raw;
+  if (updated.includes('-country-') && officialSubUserName) {
+    const restAfterSubUser = updated.slice(updated.indexOf('-country-'));
+    updated = `${officialSubUserName}${restAfterSubUser}`;
+  }
+
+  if (/-sid-[a-zA-Z0-9]+/i.test(updated)) {
+    return updated.replace(/-sid-[a-zA-Z0-9]+/i, `-sid-${newSid}`);
+  }
+
+  if (updated.includes('-country-')) {
+    return `${updated}-sid-${newSid}-filter-medium-norotate-true`;
+  }
+
+  return `${baseSubUser}-country-sy-sid-${newSid}-filter-medium-norotate-true`;
+}
+
+// Helper: Live probe through gate.nodemaven.com:8080 to activate the session on NodeMaven & get its real Exit IP
+function probeNodeMavenProxyExitIp(proxyUsername, proxyPassword, proxyHost = 'gate.nodemaven.com', timeoutMs = 6500) {
+  return new Promise((resolve) => {
+    const cleanHost = String(proxyHost || 'gate.nodemaven.com')
+      .replace(/#.*$/, '')
+      .replace(/^.*@/, '')
+      .trim() || 'gate.nodemaven.com';
+    const auth = Buffer.from(`${proxyUsername}:${proxyPassword}`).toString('base64');
+
+    const req = http.request(
+      {
+        host: cleanHost,
+        port: 8080,
+        method: 'GET',
+        path: 'http://ip-api.com/json?fields=status,country,countryCode,regionName,city,isp,query',
+        headers: {
+          Host: 'ip-api.com',
+          'Proxy-Authorization': `Basic ${auth}`,
+          'User-Agent': 'curl/8.5.0',
+          Connection: 'close',
+        },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(body);
+            if (parsed && parsed.status === 'success' && parsed.query) {
+              return resolve({
+                ok: true,
+                exit_ip: parsed.query,
+                country: parsed.country || '',
+                country_code: parsed.countryCode || 'SY',
+                region: parsed.regionName || '',
+                city: parsed.city || '',
+                isp: parsed.isp || '',
+              });
+            }
+          } catch {
+            // ignore parse errors
+          }
+          return resolve({ ok: false });
+        });
+      }
+    );
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ ok: false });
+    });
+    req.on('error', () => {
+      resolve({ ok: false });
+    });
+    req.end();
+  });
+}
+
+// Helper: Pack user:pass@host#limit=...&used=... for Supabase storage
+function packServerProxyHost(host, username, password, quotaMb, usedMb) {
+  const cleanHost = String(host || 'gate.nodemaven.com')
+    .trim()
+    .replace(/#.*$/, '')
+    .replace(/^.*@/, '');
+  const u = username ? String(username).trim() : '';
+  const p = password ? String(password).trim() : '';
+  const base = u && p ? `${u}:${p}@${cleanHost}` : cleanHost;
+  if (typeof quotaMb === 'number' && quotaMb > 0) {
+    const usedVal = typeof usedMb === 'number' && !Number.isNaN(usedMb) ? Number(usedMb.toFixed(2)) : 0;
+    return `${base}#limit=${quotaMb}&used=${usedVal}`;
+  }
+  return base;
+}
+
+// POST /api/nodemaven/regenerate
+// 1. Queries NodeMaven Sub-Users API to verify official sub-user credentials & password from the master dashboard
+// 2. Generates a new NodeMaven session (-sid-...) and activates/verifies it live on gate.nodemaven.com
+// 3. Guarantees a working Exit IP (and different from previous_ip if provided) and updates Supabase
+async function handleNodeMavenRegenerate(req, res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  try {
+    const {
+      client_id,
+      username,
+      proxy_username,
+      proxy_password,
+      proxy_host = 'gate.nodemaven.com',
+      quota_mb = 0,
+      used_mb = 0,
+      previous_ip = '',
+    } = req.body || {};
+
+    const rawUser = String(proxy_username || '').trim();
+    const subPrefix = rawUser.includes('-country-')
+      ? rawUser.split('-country-')[0].trim()
+      : rawUser || String(username || '').trim();
+
+    const oldSidMatch = rawUser.match(/-sid-([a-zA-Z0-9]+)/i);
+    const oldSid = oldSidMatch ? oldSidMatch[1] : '';
+
+    // 1. Sync with live NodeMaven Sub-Users API so sub-user & password match the master NodeMaven dashboard
+    const nmMap = await fetchNodeMavenSubUsersMap();
+    const nmSubUser = nmMap && subPrefix ? nmMap[subPrefix.toLowerCase()] : null;
+
+    const officialSubUserName = nmSubUser ? nmSubUser.proxy_username : subPrefix;
+    const officialPassword =
+      (nmSubUser && nmSubUser.proxy_password) || String(proxy_password || '').trim();
+
+    let chosenSid = generateNodeMavenSid(oldSid);
+    let chosenProxyUsername = buildNodeMavenProxyUsername(rawUser, officialSubUserName, chosenSid);
+    let probeResult = { ok: false };
+
+    // 2. Activate & verify the new proxy session live on gate.nodemaven.com (up to 3 attempts if node is slow or same IP)
+    if (officialPassword) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const candidateSid = attempt === 0 ? chosenSid : generateNodeMavenSid(chosenSid);
+        const candidateUsername = buildNodeMavenProxyUsername(
+          rawUser,
+          officialSubUserName,
+          candidateSid
+        );
+        const check = await probeNodeMavenProxyExitIp(
+          candidateUsername,
+          officialPassword,
+          proxy_host,
+          5500
+        );
+        if (check.ok) {
+          chosenSid = candidateSid;
+          chosenProxyUsername = candidateUsername;
+          probeResult = check;
+          if (!previous_ip || check.exit_ip !== previous_ip) {
+            break;
+          }
+        }
+      }
+    }
+
+    // 3. Persist updated proxy string in Supabase
+    const finalQuotaMb =
+      nmSubUser && nmSubUser.traffic_limit_bytes > 0 ? nmSubUser.traffic_limit_mb : Number(quota_mb || 0);
+    const finalUsedMb =
+      nmSubUser && nmSubUser.traffic_used_bytes >= 0 ? nmSubUser.traffic_used_mb : Number(used_mb || 0);
+
+    const packedHost = packServerProxyHost(
+      proxy_host,
+      chosenProxyUsername,
+      officialPassword,
+      finalQuotaMb,
+      finalUsedMb
+    );
+
+    if (client_id) {
+      await supabase
+        .from('proxy_clients')
+        .update({
+          proxy_host: packedHost,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', client_id);
+    }
+
+    return res.json({
+      success: true,
+      synced_with_nodemaven: Boolean(nmSubUser),
+      sub_user: officialSubUserName,
+      new_proxy_username: chosenProxyUsername,
+      proxy_password: officialPassword,
+      new_session_id: chosenSid,
+      old_session_id: oldSid || null,
+      packed_host: packedHost,
+      quota_mb: finalQuotaMb,
+      used_mb: finalUsedMb,
+      live_check: probeResult,
+    });
+  } catch (err) {
+    console.error('[NODEMAVEN-REGEN] Error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to regenerate proxy' });
+  }
+}
+
+app.post('/nodemaven/regenerate', handleNodeMavenRegenerate);
+app.post('/api/nodemaven/regenerate', handleNodeMavenRegenerate);
+
+// POST /api/nodemaven/check-proxy
+// Checks the live Exit IP, City, and ISP of a subscriber's current proxy on gate.nodemaven.com
+async function handleNodeMavenCheckProxy(req, res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  try {
+    const { proxy_username, proxy_password, proxy_host = 'gate.nodemaven.com' } = req.body || {};
+    if (!proxy_username || !proxy_password) {
+      return res.status(400).json({ ok: false, error: 'Missing proxy credentials' });
+    }
+    const check = await probeNodeMavenProxyExitIp(proxy_username, proxy_password, proxy_host, 6500);
+    return res.json(check);
+  } catch (err) {
+    console.error('[NODEMAVEN-CHECK] Error:', err);
+    return res.status(500).json({ ok: false });
+  }
+}
+
+app.post('/nodemaven/check-proxy', handleNodeMavenCheckProxy);
+app.post('/api/nodemaven/check-proxy', handleNodeMavenCheckProxy);
 
 // ============================================================
 // 2. HAPP ENCRYPTED LINK GENERATOR: GET /happ/:username
