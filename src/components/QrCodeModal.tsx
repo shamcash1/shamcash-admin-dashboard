@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { X, Copy, Check, ShieldCheck, Smartphone, Download } from 'lucide-react';
+import { X, Copy, Check, ShieldCheck, Smartphone, Download, Share2 } from 'lucide-react';
 import {
   ProxyClient,
   getClientStatusInfo,
   formatDataMb,
   buildCustomerActivationMessage,
+  getQrCodeImageUrl,
 } from '../lib/supabase';
 
 interface QrCodeModalProps {
@@ -35,6 +36,76 @@ export function copyToClipboardSync(text: string): boolean {
   }
 }
 
+/**
+ * Shares both the QR Code PNG image file AND the subscription text message via Web Share API
+ * (WhatsApp, Telegram, etc.), while also copying the message to clipboard for convenience.
+ */
+export async function shareQrAndMessage(
+  client: ProxyClient,
+  encryptedLink: string,
+  platform: 'android' | 'ios'
+): Promise<'shared_with_qr' | 'shared_text' | 'copied_only'> {
+  const message = buildCustomerActivationMessage(client, encryptedLink, platform);
+  // Always copy text to clipboard first so it's ready even if target app ignores caption
+  copyToClipboardSync(message);
+
+  const qrUrl = getQrCodeImageUrl(encryptedLink, 600);
+
+  if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+    try {
+      const response = await fetch(qrUrl);
+      if (response.ok) {
+        const blob = await response.blob();
+        const qrFile = new File([blob], `${client.username}-qr.png`, { type: 'image/png' });
+
+        if (typeof navigator.canShare === 'function' && navigator.canShare({ files: [qrFile] })) {
+          await navigator.share({
+            title: `اشتراك VPN ALISHOP - ${client.username}`,
+            text: message,
+            files: [qrFile],
+          });
+          return 'shared_with_qr';
+        }
+      }
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        return 'copied_only';
+      }
+      // fallback to text share below
+    }
+
+    try {
+      await navigator.share({
+        title: `اشتراك VPN ALISHOP - ${client.username}`,
+        text: message,
+      });
+      return 'shared_text';
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        return 'copied_only';
+      }
+    }
+  }
+
+  // Fallback for desktop browsers without Web Share API: download QR PNG and copy message
+  try {
+    const response = await fetch(qrUrl);
+    if (response.ok) {
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `${client.username}-qr.png`;
+      a.click();
+      URL.revokeObjectURL(blobUrl);
+    }
+  } catch {
+    // ignore download error
+  }
+
+  return 'copied_only';
+}
+
 export const QrCodeModal: React.FC<QrCodeModalProps> = ({
   client,
   encryptedLink,
@@ -42,8 +113,8 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
   onClose,
 }) => {
   const [copiedCode, setCopiedCode] = useState(false);
-  const [copiedAndroidMsg, setCopiedAndroidMsg] = useState(false);
-  const [copiedIosMsg, setCopiedIosMsg] = useState(false);
+  const [sharingPlatform, setSharingPlatform] = useState<'android' | 'ios' | null>(null);
+  const [sharedPlatform, setSharedPlatform] = useState<'android' | 'ios' | null>(null);
 
   if (!client) return null;
 
@@ -58,24 +129,19 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
     setTimeout(() => setCopiedCode(false), 2000);
   };
 
-  const handleCopyPlatformMessage = (platform: 'android' | 'ios') => {
-    if (!encryptedLink) return;
-    const msg = buildCustomerActivationMessage(client, encryptedLink, platform);
-    copyToClipboardSync(msg);
-    if (platform === 'android') {
-      setCopiedAndroidMsg(true);
-      setTimeout(() => setCopiedAndroidMsg(false), 2200);
-    } else {
-      setCopiedIosMsg(true);
-      setTimeout(() => setCopiedIosMsg(false), 2200);
+  const handleSharePlatform = async (platform: 'android' | 'ios') => {
+    if (!encryptedLink || sharingPlatform) return;
+    setSharingPlatform(platform);
+    try {
+      await shareQrAndMessage(client, encryptedLink, platform);
+      setSharedPlatform(platform);
+      setTimeout(() => setSharedPlatform(null), 2500);
+    } finally {
+      setSharingPlatform(null);
     }
   };
 
-  const qrImageUrl = encryptedLink
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=10&data=${encodeURIComponent(
-        encryptedLink
-      )}`
-    : '';
+  const qrImageUrl = encryptedLink ? getQrCodeImageUrl(encryptedLink, 240) : '';
 
   return (
     <div
@@ -158,46 +224,58 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({
             <span>{copiedCode ? 'تم نسخ الكود المشفر' : 'نسخ كود Happ المشفر فقط'}</span>
           </button>
 
-          {/* Platform-Specific Message Buttons */}
+          {/* Share QR + Message Buttons */}
           <div className="space-y-1.5">
             <div className="text-[11px] text-slate-400 font-medium text-center">
-              نسخ رسالة التفعيل حسب نوع جهاز المشترك:
+              مشاركة صورة الـ QR Code + رسالة الاشتراك مباشرة:
             </div>
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                disabled={loading || !encryptedLink}
-                onClick={() => handleCopyPlatformMessage('android')}
+                disabled={loading || !encryptedLink || sharingPlatform !== null}
+                onClick={() => handleSharePlatform('android')}
                 className={`py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
-                  copiedAndroidMsg
+                  sharedPlatform === 'android'
                     ? 'bg-emerald-950 border-emerald-600 text-emerald-300'
                     : 'bg-[#070A10] hover:bg-slate-800 border-slate-700 text-slate-200'
                 }`}
               >
-                {copiedAndroidMsg ? (
+                {sharedPlatform === 'android' ? (
                   <Check className="w-3.5 h-3.5 text-emerald-400" />
                 ) : (
-                  <Download className="w-3.5 h-3.5 text-emerald-400" />
+                  <Share2 className="w-3.5 h-3.5 text-emerald-400" />
                 )}
-                <span>{copiedAndroidMsg ? 'تم نسخ أندرويد' : 'رسالة أندرويد'}</span>
+                <span>
+                  {sharingPlatform === 'android'
+                    ? 'جاري التجهيز...'
+                    : sharedPlatform === 'android'
+                    ? 'تمت المشاركة'
+                    : 'مشاركة (أندرويد)'}
+                </span>
               </button>
 
               <button
                 type="button"
-                disabled={loading || !encryptedLink}
-                onClick={() => handleCopyPlatformMessage('ios')}
+                disabled={loading || !encryptedLink || sharingPlatform !== null}
+                onClick={() => handleSharePlatform('ios')}
                 className={`py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
-                  copiedIosMsg
+                  sharedPlatform === 'ios'
                     ? 'bg-sky-950 border-sky-600 text-sky-300'
                     : 'bg-[#070A10] hover:bg-slate-800 border-slate-700 text-slate-200'
                 }`}
               >
-                {copiedIosMsg ? (
+                {sharedPlatform === 'ios' ? (
                   <Check className="w-3.5 h-3.5 text-sky-400" />
                 ) : (
-                  <Smartphone className="w-3.5 h-3.5 text-sky-400" />
+                  <Share2 className="w-3.5 h-3.5 text-sky-400" />
                 )}
-                <span>{copiedIosMsg ? 'تم نسخ آيفون' : 'رسالة آيفون'}</span>
+                <span>
+                  {sharingPlatform === 'ios'
+                    ? 'جاري التجهيز...'
+                    : sharedPlatform === 'ios'
+                    ? 'تمت المشاركة'
+                    : 'مشاركة (آيفون)'}
+                </span>
               </button>
             </div>
           </div>

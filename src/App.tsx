@@ -25,6 +25,7 @@ import {
   HardDrive,
   X,
   Fingerprint,
+  Sparkles,
 } from 'lucide-react';
 import {
   supabase,
@@ -39,12 +40,17 @@ import {
   parseProxyDetails,
   regenerateNodeMavenProxyUsername,
   buildCustomerActivationMessage,
+  generateSubscriberWithPrefix,
+  previewNextNodeMavenSubUserName,
+  createNodeMavenSubUserLive,
+  getQrCodeImageUrl,
   HAPP_IOS_URL,
   HAPP_ANDROID_APK_URL,
 } from './lib/supabase';
 import { ClientModal } from './components/ClientModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
-import { QrCodeModal, copyToClipboardSync } from './components/QrCodeModal';
+import { QrCodeModal, copyToClipboardSync, shareQrAndMessage } from './components/QrCodeModal';
+import { usePWAInstall } from './hooks/usePWAInstall';
 
 const LOCAL_DELTA_STORAGE_KEY = 'shamcash_admin_local_delta_v1';
 
@@ -94,6 +100,7 @@ function saveLocalDelta(delta: LocalDeltaState) {
 }
 
 export default function App() {
+  const { isInstalled, isIOS, showIOSGuide, setShowIOSGuide, promptInstall } = usePWAInstall();
   const [remoteClients, setRemoteClients] = useState<ProxyClient[]>([]);
   const [localDelta, setLocalDelta] = useState<LocalDeltaState>(() => loadLocalDelta());
   const [loading, setLoading] = useState<boolean>(true);
@@ -123,8 +130,33 @@ export default function App() {
   const [qrEncryptedLink, setQrEncryptedLink] = useState<string | null>(null);
   const [qrLoading, setQrLoading] = useState<boolean>(false);
 
-  // Platform choice modal when clicking "الرسالة"
+  // Platform choice modal when clicking "مشاركة"
   const [messagePlatformClient, setMessagePlatformClient] = useState<ProxyClient | null>(null);
+  const [sharingPlatformLoading, setSharingPlatformLoading] = useState<'android' | 'ios' | null>(
+    null
+  );
+
+  // Auto-generate subscriber modal state (Creates brand-new Sub-User in NodeMaven Parent Dashboard + Subscriber in Our Dashboard)
+  const [autoGenModalOpen, setAutoGenModalOpen] = useState<boolean>(false);
+  const [nmProxyPrefix, setNmProxyPrefix] = useState<string>(() => {
+    try {
+      return localStorage.getItem('shamcash_NmProxyPrefix_v1') || 'Ammarmedia';
+    } catch {
+      return 'Ammarmedia';
+    }
+  });
+  const [customSubscriberName, setCustomSubscriberName] = useState<string>('');
+  const [subscriberPrefix, setSubscriberPrefix] = useState<string>(() => {
+    try {
+      return localStorage.getItem('shamcash_PreferredPrefix_v1') || 'alishop';
+    } catch {
+      return 'alishop';
+    }
+  });
+  const [autoGenQuotaMb, setAutoGenQuotaMb] = useState<string>('50');
+  const [autoGenDays, setAutoGenDays] = useState<number>(30);
+  const [autoGenerating, setAutoGenerating] = useState<boolean>(false);
+  const [autoGenError, setAutoGenError] = useState<string | null>(null);
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -396,7 +428,7 @@ export default function App() {
     handleOpenQrModal(client);
   };
 
-  // Open Platform Selector Modal when clicking "الرسالة"
+  // Open Share Modal when clicking "مشاركة"
   const handleRequestCustomerMessage = (client: ProxyClient) => {
     if (!happCache[client.username]) {
       fetchHappEncryptedLink(client.username)
@@ -408,30 +440,182 @@ export default function App() {
     setMessagePlatformClient(client);
   };
 
-  // Copy Platform-Specific Customer Message (Android OR iOS only)
-  const handleConfirmCopyPlatformMessage = (platform: 'android' | 'ios') => {
-    if (!messagePlatformClient) return;
+  // Share QR Code Image + Platform-Specific Customer Message directly to WhatsApp / Native Share
+  const handleConfirmSharePlatformMessage = async (
+    platform: 'android' | 'ios',
+    mode: 'native' | 'whatsapp_link' = 'native'
+  ) => {
+    if (!messagePlatformClient || sharingPlatformLoading) return;
     const client = messagePlatformClient;
-    const cached = happCache[client.username];
+    setSharingPlatformLoading(platform);
 
-    if (!cached) {
+    try {
+      let encrypted = happCache[client.username];
+      if (!encrypted) {
+        encrypted = await fetchHappEncryptedLink(client.username);
+        setHappCache((prev) => ({ ...prev, [client.username]: encrypted! }));
+      }
+
+      const message = buildCustomerActivationMessage(client, encrypted, platform);
+      copyToClipboardSync(message);
+
+      if (mode === 'whatsapp_link') {
+        const waUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+        window.open(waUrl, '_blank', 'noopener,noreferrer');
+        setCopiedMsgId(client.id);
+        setMessagePlatformClient(null);
+        showToast(`تم نسخ الرسالة وفتح واتساب لمشاركة اشتراك ${client.username}`);
+        return;
+      }
+
+      const result = await shareQrAndMessage(client, encrypted, platform);
+      setCopiedMsgId(client.id);
       setMessagePlatformClient(null);
-      handleOpenQrModal(client);
+
+      if (result === 'shared_with_qr') {
+        showToast(`تمت مشاركة الباركود QR ونص الاشتراك · ${client.username}`);
+      } else if (result === 'shared_text') {
+        showToast(`تمت مشاركة نص الاشتراك ونسخه للحافظة · ${client.username}`);
+      } else {
+        showToast(`تم نسخ نص الاشتراك وتحميل صورة الباركود QR · ${client.username}`);
+      }
+
+      setTimeout(() => {
+        setCopiedMsgId((prev) => (prev === client.id ? null : prev));
+      }, 2400);
+    } catch {
+      showToast('تعذر تجهيز المشاركة حالياً، حاول مرة أخرى');
+    } finally {
+      setSharingPlatformLoading(null);
+    }
+  };
+
+  // Existing NodeMaven sub-user names list for accurate next-number preview
+  const existingNodeMavenSubUserNames = useMemo(() => {
+    const names = new Set<string>();
+    Object.values(nodeMavenMap).forEach((u) => {
+      if (u.proxy_username) names.add(u.proxy_username);
+    });
+    clients.forEach((c) => {
+      const parsed = parseProxyDetails(c);
+      if (parsed.subUser) names.add(parsed.subUser);
+    });
+    return Array.from(names);
+  }, [nodeMavenMap, clients]);
+
+  const previewNodeMavenSubUser = useMemo(() => {
+    return previewNextNodeMavenSubUserName(nmProxyPrefix, existingNodeMavenSubUserNames);
+  }, [nmProxyPrefix, existingNodeMavenSubUserNames]);
+
+  // Open Auto-Generate Subscriber Modal
+  const openAutoGenModal = () => {
+    setAutoGenError(null);
+    const nextSubName = generateSubscriberWithPrefix(
+      subscriberPrefix,
+      clients.map((c) => c.username)
+    );
+    setCustomSubscriberName(nextSubName);
+    setAutoGenDays(30);
+    setAutoGenQuotaMb('50');
+    setAutoGenModalOpen(true);
+  };
+
+  // Update NodeMaven parent proxy prefix
+  const handleNmProxyPrefixChange = (nextVal: string) => {
+    setNmProxyPrefix(nextVal);
+    try {
+      localStorage.setItem('shamcash_NmProxyPrefix_v1', nextVal.trim() || 'Ammarmedia');
+    } catch {
+      // ignore
+    }
+  };
+
+  // Update local subscriber prefix & regenerate subscriber name
+  const handleSubscriberPrefixGenerate = (prefixToUse: string) => {
+    setSubscriberPrefix(prefixToUse);
+    try {
+      localStorage.setItem('shamcash_PreferredPrefix_v1', prefixToUse.trim() || 'alishop');
+    } catch {
+      // ignore
+    }
+    const generated = generateSubscriberWithPrefix(
+      prefixToUse,
+      clients.map((c) => c.username)
+    );
+    setCustomSubscriberName(generated);
+  };
+
+  // Confirm Auto-Generate:
+  // 1. Creates a brand-new Sub-User from scratch in the Parent NodeMaven Dashboard via API (POST /api/v2/base/sub-users/)
+  // 2. Configures its Syrian sticky session (-country-sy-sid-...-filter-medium-norotate-true)
+  // 3. Adds the subscriber with the chosen subscriber name into our Dashboard (Supabase)
+  const handleConfirmAutoGenerateSubscriber = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (autoGenerating) return;
+    setAutoGenError(null);
+
+    const trimmedSubName = customSubscriberName.trim().replace(/\s+/g, '_');
+    if (!trimmedSubName) {
+      setAutoGenError('يرجى إدخال أو توليد اسم المشترك الذي سيضاف في لوحتك.');
       return;
     }
 
-    const message = buildCustomerActivationMessage(client, cached, platform);
-    copyToClipboardSync(message);
-    setCopiedMsgId(client.id);
-    setMessagePlatformClient(null);
-    showToast(
-      platform === 'android'
-        ? `تم نسخ رسالة أندرويد فقط · ${client.username}`
-        : `تم نسخ رسالة آيفون فقط · ${client.username}`
+    if (!/^[a-zA-Z0-9_.-]+$/.test(trimmedSubName)) {
+      setAutoGenError('اسم المشترك يقبل أحرف إنجليزية وأرقام فقط.');
+      return;
+    }
+
+    const isDuplicate = clients.some(
+      (c) => c.username.toLowerCase() === trimmedSubName.toLowerCase()
     );
-    setTimeout(() => {
-      setCopiedMsgId((prev) => (prev === client.id ? null : prev));
-    }, 2200);
+    if (isDuplicate) {
+      setAutoGenError('اسم المشترك موجود مسبقاً في لوحتك، يرجى تغييره أو الضغط على توليد رقم جديد.');
+      return;
+    }
+
+    setAutoGenerating(true);
+
+    try {
+      const host = clients[0]?.proxy_host || 'gate.nodemaven.com';
+      const port = clients[0]?.proxy_port || 1080;
+      const requestedQuotaMb = Math.max(0, Number(autoGenQuotaMb) || 50);
+
+      // Call backend to create a brand-new Sub-User from scratch in NodeMaven Parent Dashboard
+      const nmCreated = await createNodeMavenSubUserLive({
+        proxy_prefix: previewNodeMavenSubUser,
+        quota_mb: requestedQuotaMb,
+        proxy_host: host,
+      });
+
+      if (!nmCreated.success || !nmCreated.full_proxy_username || !nmCreated.proxy_password) {
+        setAutoGenError(
+          nmCreated.error || 'تعذر إنشاء يوزر البروكسي الجديد في اللوحة الأم NodeMaven.'
+        );
+        return;
+      }
+
+      const expiryDate = addDaysToDateString(null, autoGenDays);
+
+      await handleSaveClient({
+        username: trimmedSubName,
+        is_active: true,
+        expiry_date: expiryDate,
+        proxy_host: host,
+        proxy_port: port,
+        proxy_username: nmCreated.full_proxy_username,
+        proxy_password: nmCreated.proxy_password,
+        quota_mb: nmCreated.quota_mb ?? requestedQuotaMb,
+        used_mb: 0,
+      });
+
+      await syncNodeMavenUsage();
+      setAutoGenModalOpen(false);
+      showToast(
+        `تم إنشاء البروكسي (${nmCreated.sub_user}) في اللوحة الأم وإضافة المشترك (${trimmedSubName}) بنجاح!`
+      );
+    } finally {
+      setAutoGenerating(false);
+    }
   };
 
   // Save Client (Add / Edit Modal)
@@ -994,8 +1178,30 @@ export default function App() {
             </button>
           </div>
 
-          {/* Zone 3: Primary CTA */}
-          <div className="flex items-center shrink-0">
+          {/* Zone 3: Primary CTAs (Install App + Auto-Generate with Prefix + Manual Add) */}
+          <div className="flex items-center gap-2 shrink-0">
+            {!isInstalled && (
+              <button
+                type="button"
+                onClick={promptInstall}
+                className="px-3 py-2 text-xs sm:text-sm font-semibold text-emerald-300 hover:text-white bg-emerald-950/70 hover:bg-emerald-700 border border-emerald-700/70 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                title="تثبيت لوحة تحكم VPN ALISHOP كتطبيق هاتف"
+              >
+                <Smartphone className="w-4 h-4 text-emerald-400" />
+                <span className="hidden sm:inline">تثبيت التطبيق</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={openAutoGenModal}
+              className="px-3.5 py-2 text-xs sm:text-sm font-semibold text-amber-300 hover:text-white bg-amber-950/70 hover:bg-amber-600 border border-amber-700/70 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+              title="توليد مشترك تلقائياً ببادئة تختارها مع نفس إعدادات البروكسي السوري"
+            >
+              <Sparkles className="w-4 h-4 text-amber-400" />
+              <span>توليد تلقائي</span>
+            </button>
+
             <button
               type="button"
               onClick={openAddModal}
@@ -1011,22 +1217,32 @@ export default function App() {
       {/* Main Workspace */}
       <main className="flex-1 max-w-[1380px] w-full mx-auto px-4 sm:px-6 py-6 space-y-5">
         {/* Mobile App Links Bar (Visible only on small screens) */}
-        <div className="grid grid-cols-2 gap-2 md:hidden">
+        <div className={`grid ${!isInstalled ? 'grid-cols-3' : 'grid-cols-2'} gap-2 md:hidden`}>
+          {!isInstalled && (
+            <button
+              type="button"
+              onClick={promptInstall}
+              className="py-2 px-2.5 rounded-xl text-xs font-semibold bg-emerald-950/70 border border-emerald-700/70 text-emerald-300 flex items-center justify-center gap-1.5"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span>تثبيت التطبيق</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={handleCopyAndroidLink}
             className="py-2 px-3 rounded-xl text-xs font-medium bg-[#0E131F] border border-slate-800 text-slate-200 flex items-center justify-center gap-1.5"
           >
-            <Download className="w-3.5 h-3.5 text-emerald-400" />
-            <span>{copiedAndroidApp ? 'تم نسخ أندرويد' : 'نسخ تطبيق أندرويد'}</span>
+            <Download className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span>{copiedAndroidApp ? 'تم نسخ أندرويد' : 'نسخ أندرويد'}</span>
           </button>
           <button
             type="button"
             onClick={handleCopyIosLink}
             className="py-2 px-3 rounded-xl text-xs font-medium bg-[#0E131F] border border-slate-800 text-slate-200 flex items-center justify-center gap-1.5"
           >
-            <Smartphone className="w-3.5 h-3.5 text-sky-400" />
-            <span>{copiedIosApp ? 'تم نسخ آيفون' : 'نسخ تطبيق آيفون'}</span>
+            <Smartphone className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+            <span>{copiedIosApp ? 'تم نسخ آيفون' : 'نسخ آيفون'}</span>
           </button>
         </div>
 
@@ -1535,7 +1751,7 @@ export default function App() {
                                   <span>{isHappCopied ? 'تم النسخ' : 'كود Happ'}</span>
                                 </button>
 
-                                {/* Copy Customer Message (Opens Android vs iPhone choice modal) */}
+                                {/* Share Customer QR + Message (Opens Android vs iPhone share modal) */}
                                 <button
                                   type="button"
                                   onClick={() => handleRequestCustomerMessage(client)}
@@ -1544,13 +1760,14 @@ export default function App() {
                                       ? 'bg-sky-950 border-sky-600 text-sky-300'
                                       : 'bg-[#070A10] hover:bg-slate-800 border-slate-800 text-slate-300'
                                   }`}
+                                  title="مشاركة الباركود QR ونص رسالة الاشتراك مباشرة إلى واتساب أو أي تطبيق"
                                 >
                                   {isMsgCopied ? (
                                     <Check className="w-3.5 h-3.5 text-sky-400" />
                                   ) : (
                                     <Share2 className="w-3.5 h-3.5 text-sky-400" />
                                   )}
-                                  <span>الرسالة</span>
+                                  <span>مشاركة</span>
                                 </button>
 
                                 {/* QR Code Modal */}
@@ -1881,7 +2098,7 @@ export default function App() {
                         ) : (
                           <Share2 className="w-3.5 h-3.5 text-sky-400" />
                         )}
-                        <span>الرسالة</span>
+                        <span>مشاركة</span>
                       </button>
 
                       <button
@@ -1901,19 +2118,19 @@ export default function App() {
         )}
       </main>
 
-      {/* Platform Selector Modal When Clicking "الرسالة" */}
+      {/* Share Modal When Clicking "مشاركة" (Shares QR Code Image + Subscription Text) */}
       {messagePlatformClient && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs overflow-y-auto"
           role="dialog"
           aria-modal="true"
         >
-          <div className="w-full max-w-sm bg-[#0E131F] border border-slate-800/90 rounded-2xl shadow-2xl overflow-hidden">
+          <div className="w-full max-w-sm bg-[#0E131F] border border-slate-800/90 rounded-2xl shadow-2xl overflow-hidden my-auto">
             <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800/80">
               <div className="flex items-center gap-2">
                 <Share2 className="w-4 h-4 text-sky-400" />
                 <h3 className="text-sm font-bold text-white">
-                  اختر نوع جهاز المشترك ({messagePlatformClient.username})
+                  مشاركة اشتراك ({messagePlatformClient.username})
                 </h3>
               </div>
               <button
@@ -1925,55 +2142,327 @@ export default function App() {
               </button>
             </div>
 
-            <div className="p-5 space-y-3">
-              <p className="text-xs text-slate-400 leading-relaxed">
-                سيتم نسخ رسالة التفعيل مع <strong className="text-slate-200">رابط التطبيق المناسب فقط</strong> وكود التفعيل المشفر:
-              </p>
+            <div className="p-5 space-y-4">
+              {/* Live QR Code Preview inside Share Modal */}
+              <div className="flex flex-col items-center justify-center p-3 rounded-xl bg-[#070A10] border border-slate-800/80">
+                {happCache[messagePlatformClient.username] ? (
+                  <div className="bg-white p-2 rounded-xl">
+                    <img
+                      src={getQrCodeImageUrl(happCache[messagePlatformClient.username], 220)}
+                      alt={messagePlatformClient.username}
+                      className="w-36 h-36 object-contain"
+                    />
+                  </div>
+                ) : (
+                  <div className="w-36 h-36 flex items-center justify-center">
+                    <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                )}
+                <span className="mt-2 text-[11px] text-slate-400">
+                  سيتم إرفاق <strong className="text-white">صورة الـ QR Code + نص رسالة التفعيل</strong> معاً
+                </span>
+              </div>
 
               <div className="grid grid-cols-1 gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => handleConfirmCopyPlatformMessage('android')}
-                  className="w-full p-3.5 rounded-xl bg-[#070A10] hover:bg-emerald-950/40 border border-slate-800 hover:border-emerald-600/70 flex items-center justify-between transition-all group"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="p-2.5 rounded-xl bg-emerald-950/80 border border-emerald-800/70 text-emerald-400">
-                      <Download className="w-5 h-5" />
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm font-bold text-white group-hover:text-emerald-300">
-                        مشترك أندرويد (Android)
+                {/* Share for Android */}
+                <div className="p-3 rounded-xl bg-[#070A10] border border-slate-800 space-y-2">
+                  <button
+                    type="button"
+                    disabled={sharingPlatformLoading !== null}
+                    onClick={() => handleConfirmSharePlatformMessage('android', 'native')}
+                    className="w-full p-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-between transition-all"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Download className="w-4 h-4 shrink-0" />
+                      <div className="text-right">
+                        <div className="text-xs font-bold">
+                          {sharingPlatformLoading === 'android'
+                            ? 'جاري تجهيز الباركود والرسالة...'
+                            : 'مشاركة لمشترك أندرويد (QR + الرسالة)'}
+                        </div>
+                        <div className="text-[10px] text-emerald-100/80">
+                          يرسل صورة الباركود + رابط APK المباشر + الكود المشفر
+                        </div>
                       </div>
-                      <div className="text-[11px] text-slate-400">
-                        يرسل رابط تحميل APK المباشر فقط + الكود المشفر
-                      </div>
                     </div>
-                  </div>
-                  <Copy className="w-4 h-4 text-slate-500 group-hover:text-emerald-400" />
-                </button>
+                    <Share2 className="w-4 h-4 shrink-0" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleConfirmSharePlatformMessage('android', 'whatsapp_link')}
+                    className="w-full py-1.5 px-3 rounded-lg bg-[#0E131F] hover:bg-slate-800 border border-slate-800 text-[11px] font-medium text-emerald-300 flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <span>إرسال النص مباشرة عبر واتساب ويب (WhatsApp)</span>
+                  </button>
+                </div>
 
-                <button
-                  type="button"
-                  onClick={() => handleConfirmCopyPlatformMessage('ios')}
-                  className="w-full p-3.5 rounded-xl bg-[#070A10] hover:bg-sky-950/40 border border-slate-800 hover:border-sky-600/70 flex items-center justify-between transition-all group"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="p-2.5 rounded-xl bg-sky-950/80 border border-sky-800/70 text-sky-400">
-                      <Smartphone className="w-5 h-5" />
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm font-bold text-white group-hover:text-sky-300">
-                        مشترك آيفون (iPhone / iOS)
+                {/* Share for iPhone */}
+                <div className="p-3 rounded-xl bg-[#070A10] border border-slate-800 space-y-2">
+                  <button
+                    type="button"
+                    disabled={sharingPlatformLoading !== null}
+                    onClick={() => handleConfirmSharePlatformMessage('ios', 'native')}
+                    className="w-full p-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white flex items-center justify-between transition-all"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Smartphone className="w-4 h-4 shrink-0" />
+                      <div className="text-right">
+                        <div className="text-xs font-bold">
+                          {sharingPlatformLoading === 'ios'
+                            ? 'جاري تجهيز الباركود والرسالة...'
+                            : 'مشاركة لمشترك آيفون (QR + الرسالة)'}
+                        </div>
+                        <div className="text-[10px] text-sky-100/80">
+                          يرسل صورة الباركود + رابط App Store + الكود المشفر
+                        </div>
                       </div>
-                      <div className="text-[11px] text-slate-400">
-                        يرسل رابط App Store فقط + الكود المشفر
-                      </div>
                     </div>
-                  </div>
-                  <Copy className="w-4 h-4 text-slate-500 group-hover:text-sky-400" />
-                </button>
+                    <Share2 className="w-4 h-4 shrink-0" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleConfirmSharePlatformMessage('ios', 'whatsapp_link')}
+                    className="w-full py-1.5 px-3 rounded-lg bg-[#0E131F] hover:bg-slate-800 border border-slate-800 text-[11px] font-medium text-sky-300 flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <span>إرسال النص مباشرة عبر واتساب ويب (WhatsApp)</span>
+                  </button>
+                </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Auto-Generate Subscriber Modal: Creates Brand-New Sub-User in NodeMaven Parent Dashboard + Subscriber in Local Dashboard */}
+      {autoGenModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs overflow-y-auto"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-lg bg-[#0E131F] border border-slate-800/90 rounded-2xl shadow-2xl overflow-hidden my-auto">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800/80">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <h2 className="text-sm font-bold text-white">
+                  توليد بروكسي سوري جديد في اللوحة الأم (NodeMaven) + مشترك في لوحتك
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAutoGenModalOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800/80 rounded-lg transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmAutoGenerateSubscriber} className="p-6 space-y-4">
+              {autoGenError && (
+                <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-800/60 text-rose-300 text-xs">
+                  {autoGenError}
+                </div>
+              )}
+
+              {/* 1. NodeMaven Parent Dashboard Proxy Prefix */}
+              <div className="p-4 rounded-xl bg-[#070A10] border border-amber-800/50 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                    <Server className="w-3.5 h-3.5 text-amber-400" />
+                    <span>1. بادئة اسم البروكسي الذي سيُنشأ في اللوحة الأم (NodeMaven)</span>
+                  </label>
+                  <span className="text-[10px] font-mono text-slate-400" dir="ltr">
+                    ≥ 9 chars
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={nmProxyPrefix}
+                    onChange={(e) => handleNmProxyPrefixChange(e.target.value)}
+                    placeholder="Ammarmedia أو Alishop"
+                    dir="ltr"
+                    className="flex-1 bg-[#0E131F] border border-slate-800 focus:border-amber-500 rounded-xl px-3.5 py-2 text-sm font-mono font-bold text-white placeholder-slate-600 focus:outline-none transition-colors"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleNmProxyPrefixChange('Ammarmedia')}
+                    className="px-2.5 py-2 rounded-xl bg-[#0E131F] hover:bg-slate-800 border border-slate-800 text-[11px] font-mono text-slate-300"
+                    dir="ltr"
+                  >
+                    Ammarmedia
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleNmProxyPrefixChange('Alishop')}
+                    className="px-2.5 py-2 rounded-xl bg-[#0E131F] hover:bg-slate-800 border border-slate-800 text-[11px] font-mono text-amber-300"
+                    dir="ltr"
+                  >
+                    Alishop
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-xs">
+                  <span className="text-slate-400">اليوزر الجديد الذي سيُنشأ في اللوحة الأم:</span>
+                  <span
+                    className="font-mono text-sm font-extrabold text-amber-400 bg-amber-950/40 border border-amber-700/50 px-2.5 py-0.5 rounded-lg"
+                    dir="ltr"
+                  >
+                    {previewNodeMavenSubUser}
+                  </span>
+                </div>
+
+                <div
+                  className="text-[11px] font-mono text-slate-400 bg-[#0B0F19] border border-slate-800/80 rounded-lg px-2.5 py-1.5 overflow-x-auto whitespace-nowrap"
+                  dir="ltr"
+                >
+                  <span className="text-amber-300 font-bold">{previewNodeMavenSubUser}</span>
+                  <span className="text-slate-400">
+                    -country-sy-sid-xxxxxxxxxxxxx-filter-medium-norotate-true
+                  </span>
+                </div>
+              </div>
+
+              {/* 2. Subscriber Name in Our Local Dashboard */}
+              <div className="p-4 rounded-xl bg-[#070A10] border border-emerald-800/50 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-emerald-300">
+                    2. اسم المشترك الذي سيُضاف لديك في اللوحة
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setCustomSubscriberName(previewNodeMavenSubUser)}
+                      className="px-2 py-0.5 rounded bg-emerald-950/70 hover:bg-emerald-800 text-[11px] font-semibold text-emerald-300 border border-emerald-700/60"
+                    >
+                      مطابقة مع اسم البروكسي
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSubscriberPrefixGenerate(subscriberPrefix)}
+                      className="px-2 py-0.5 rounded bg-[#0E131F] hover:bg-slate-800 text-[11px] font-semibold text-sky-300 border border-slate-700 flex items-center gap-1"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      <span>توليد رقم تالي</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="col-span-2">
+                    <span className="block text-[11px] text-slate-400 mb-1">
+                      الاسم النهائي للمشترك في لوحتك:
+                    </span>
+                    <input
+                      type="text"
+                      value={customSubscriberName}
+                      onChange={(e) => setCustomSubscriberName(e.target.value)}
+                      placeholder="alishop1 أو اسم الزبون"
+                      dir="ltr"
+                      className="w-full bg-[#0E131F] border border-slate-800 focus:border-emerald-500 rounded-xl px-3.5 py-2 text-sm font-mono font-bold text-white placeholder-slate-600 focus:outline-none transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <span className="block text-[11px] text-slate-400 mb-1">
+                      بادئة التوليد السريع:
+                    </span>
+                    <input
+                      type="text"
+                      value={subscriberPrefix}
+                      onChange={(e) => handleSubscriberPrefixGenerate(e.target.value)}
+                      placeholder="alishop"
+                      dir="ltr"
+                      className="w-full bg-[#0E131F] border border-slate-800 focus:border-sky-500 rounded-xl px-2.5 py-2 text-xs font-mono text-sky-300 placeholder-slate-600 focus:outline-none transition-colors"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. NodeMaven Quota MB & Subscription Duration */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                    الباقة في اللوحة الأم NodeMaven (MB)
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      min={1}
+                      value={autoGenQuotaMb}
+                      onChange={(e) => setAutoGenQuotaMb(e.target.value)}
+                      dir="ltr"
+                      className="w-20 bg-[#070A10] border border-slate-800 focus:border-emerald-500 rounded-xl px-2.5 py-2 text-xs font-mono font-bold text-white focus:outline-none"
+                    />
+                    {[50, 100, 500].map((mb) => (
+                      <button
+                        key={mb}
+                        type="button"
+                        onClick={() => setAutoGenQuotaMb(String(mb))}
+                        className={`px-2 py-2 rounded-xl text-[11px] font-mono font-semibold border transition-colors ${
+                          Number(autoGenQuotaMb) === mb
+                            ? 'bg-emerald-950/70 border-emerald-600 text-emerald-300'
+                            : 'bg-[#070A10] border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                        dir="ltr"
+                      >
+                        {mb}MB
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                    مدة صلاحية الاشتراك
+                  </label>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {[
+                      { label: '7ي', days: 7 },
+                      { label: '30ي', days: 30 },
+                      { label: '90ي', days: 90 },
+                      { label: 'سنة', days: 365 },
+                    ].map((preset) => (
+                      <button
+                        key={preset.days}
+                        type="button"
+                        onClick={() => setAutoGenDays(preset.days)}
+                        className={`py-2 px-1.5 rounded-xl text-xs font-semibold border transition-colors ${
+                          autoGenDays === preset.days
+                            ? 'bg-emerald-950/70 border-emerald-600 text-emerald-300'
+                            : 'bg-[#070A10] border-slate-800 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-800/80">
+                <button
+                  type="button"
+                  onClick={() => setAutoGenModalOpen(false)}
+                  className="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white bg-slate-800/70 hover:bg-slate-800 rounded-xl transition-colors"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  disabled={autoGenerating}
+                  className="px-5 py-2.5 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>
+                    {autoGenerating
+                      ? 'جاري الإنشاء في NodeMaven واللوحة...'
+                      : 'إنشاء البروكسي في اللوحة الأم + إضافة المشترك'}
+                  </span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -2014,6 +2503,85 @@ export default function App() {
         onClose={() => setDeletingClient(null)}
         onConfirm={handleDeleteClient}
       />
+
+      {/* PWA Install Guide Modal (iOS Safari / Mobile Browser Fallback) */}
+      {showIOSGuide && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+          <div
+            className="w-full max-w-md bg-[#0E131F] border border-slate-800 rounded-2xl shadow-2xl overflow-hidden"
+            dir="rtl"
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800/80">
+              <div className="flex items-center gap-3">
+                <img
+                  src="/pwa-192x192.png"
+                  alt="VPN ALISHOP"
+                  className="w-10 h-10 rounded-xl border border-emerald-500/40"
+                />
+                <div>
+                  <h3 className="text-sm font-bold text-white">تثبيت تطبيق VPN ALISHOP</h3>
+                  <p className="text-[11px] text-slate-400">
+                    ثبّت لوحة التحكم كتطبيق هاتف بشعار VPN ALISHOP
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowIOSGuide(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs text-slate-300">
+              {isIOS ? (
+                <div className="space-y-3 bg-[#070A10] border border-slate-800 rounded-xl p-4">
+                  <div className="font-bold text-emerald-400">خطوات التثبيت على آيفون (Safari):</div>
+                  <ol className="space-y-2 list-decimal list-inside text-slate-200 leading-relaxed">
+                    <li>
+                      اضغط على زر <strong>المشاركة (Share)</strong> في شريط متصفح سفاري بالأسفل.
+                    </li>
+                    <li>
+                      اختر <strong>إضافة إلى الشاشة الرئيسية (Add to Home Screen)</strong>.
+                    </li>
+                    <li>
+                      اضغط <strong>إضافة (Add)</strong> ليظهر تطبيق <strong>VPN ALISHOP</strong> بشعاره الرسمي على شاشة هاتفك.
+                    </li>
+                  </ol>
+                </div>
+              ) : (
+                <div className="space-y-3 bg-[#070A10] border border-slate-800 rounded-xl p-4">
+                  <div className="font-bold text-emerald-400">
+                    خطوات التثبيت على الهاتف (Chrome / Safari):
+                  </div>
+                  <ol className="space-y-2 list-decimal list-inside text-slate-200 leading-relaxed">
+                    <li>
+                      افتح رابط اللوحة في متصفح <strong>Chrome</strong> (أندرويد) أو <strong>Safari</strong> (آيفون).
+                    </li>
+                    <li>
+                      اضغط على قائمة المتصفح <strong>(⋮)</strong> ثم اختر <strong>تثبيت التطبيق (Install App)</strong> أو <strong>إضافة إلى الشاشة الرئيسية</strong>.
+                    </li>
+                    <li>
+                      سيتم تثبيت <strong>VPN ALISHOP</strong> كتطبيق مستقل بشعاره الرسمي.
+                    </li>
+                  </ol>
+                </div>
+              )}
+
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setShowIOSGuide(false)}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-colors"
+                >
+                  حسناً، فهمت
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

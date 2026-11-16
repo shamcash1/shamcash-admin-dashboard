@@ -230,6 +230,123 @@ export function parseProxyDetails(client: ProxyClient): {
   };
 }
 
+export function generateSubscriberWithPrefix(
+  rawPrefix: string,
+  existingUsernames: string[] = []
+): string {
+  const cleaned = (rawPrefix || 'alishop')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_.-]/g, '') || 'alishop';
+
+  // If user typed a specific name that doesn't exist yet, or wants sequential numbering:
+  const existingSet = new Set(existingUsernames.map((u) => u.toLowerCase()));
+  const basePrefix = cleaned.replace(/[0-9]+$/, '') || cleaned;
+
+  for (let i = 1; i <= 9999; i++) {
+    const candidate = `${basePrefix}${i}`;
+    if (!existingSet.has(candidate.toLowerCase())) {
+      return candidate;
+    }
+  }
+  return `${basePrefix}_${Date.now().toString().slice(-4)}`;
+}
+
+/**
+ * Computes the next valid NodeMaven Sub-User name (>= 9 chars, ^[a-zA-Z0-9_]*$)
+ * matching the parent dashboard's sequential naming (e.g. Ammarmedia -> Ammarmedia6, Alishop -> Alishop_01)
+ */
+export function previewNextNodeMavenSubUserName(
+  rawPrefix: string,
+  existingSubUsers: string[] = []
+): string {
+  let clean = String(rawPrefix || 'Ammarmedia')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_]/g, '');
+  if (!clean) clean = 'Ammarmedia';
+
+  const existingSet = new Set(existingSubUsers.map((u) => u.toLowerCase()));
+
+  if (clean.length >= 9 && !existingSet.has(clean.toLowerCase()) && /[0-9]$/.test(clean)) {
+    return clean;
+  }
+
+  const basePrefix = clean.replace(/[0-9]+$/, '') || clean;
+
+  for (let i = 0; i <= 9999; i++) {
+    let candidate = `${basePrefix}${i}`;
+    if (candidate.length < 9) {
+      const padLen = 9 - basePrefix.length;
+      const paddedNum = String(i === 0 ? 1 : i).padStart(Math.max(2, padLen), '0');
+      candidate = `${basePrefix}_${paddedNum}`.replace(/__+/g, '_');
+      if (candidate.length < 9) {
+        candidate = `${basePrefix}00${paddedNum}`.slice(0, 12);
+      }
+    }
+    if (!existingSet.has(candidate.toLowerCase())) {
+      return candidate;
+    }
+  }
+
+  return `${basePrefix}_${Math.floor(10000 + Math.random() * 90000)}`;
+}
+
+export async function createNodeMavenSubUserLive(params: {
+  proxy_prefix: string;
+  quota_mb: number;
+  proxy_host?: string;
+}): Promise<{
+  success: boolean;
+  sub_user?: string;
+  full_proxy_username?: string;
+  proxy_password?: string;
+  session_id?: string;
+  quota_mb?: number;
+  live_check?: {
+    ok: boolean;
+    exit_ip?: string;
+    city?: string;
+    isp?: string;
+  };
+  error?: string;
+}> {
+  const endpoints = [
+    '/api/nodemaven/create-subuser',
+    `${API_ROOT_URL}/api/nodemaven/create-subuser`,
+  ];
+
+  for (const url of endpoints) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const data = await res.json();
+      if (res.ok && data?.success && data?.full_proxy_username) {
+        return data;
+      }
+      if (data?.error) {
+        return { success: false, error: data.error };
+      }
+    } catch {
+      // try next endpoint
+    }
+  }
+
+  return {
+    success: false,
+    error: 'تعذر الاتصال بـ API اللوحة الأم NodeMaven لإنشاء البروكسي الجديد',
+  };
+}
+
+export function getQrCodeImageUrl(encryptedLink: string, size = 500): string {
+  return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&margin=16&data=${encodeURIComponent(
+    encryptedLink
+  )}`;
+}
+
 export function buildCustomerActivationMessage(
   client: ProxyClient,
   encryptedLink: string,
@@ -252,7 +369,7 @@ export function buildCustomerActivationMessage(
     ``,
     appLine,
     ``,
-    `🔑 *كود التفعيل المشفر (انسخه والصقه داخل التطبيق):*`,
+    `🔑 *كود التفعيل المشفر (انسخه والصقه داخل التطبيق أو امسح الباركود المرفق):*`,
     encryptedLink,
   ].join('\n');
 }

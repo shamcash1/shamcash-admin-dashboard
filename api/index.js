@@ -904,6 +904,128 @@ async function handleNodeMavenCheckProxy(req, res) {
 app.post('/nodemaven/check-proxy', handleNodeMavenCheckProxy);
 app.post('/api/nodemaven/check-proxy', handleNodeMavenCheckProxy);
 
+// Helper: Generate a valid NodeMaven Sub-User name (>= 9 chars, ^[a-zA-Z0-9_]*$) from a chosen prefix
+function buildValidNodeMavenSubUserName(rawPrefix, existingMap = {}) {
+  let clean = String(rawPrefix || 'Alishop')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_]/g, '');
+  if (!clean) clean = 'Alishop';
+
+  // Check if user typed a full name that is already >= 9 chars and doesn't exist yet
+  if (clean.length >= 9 && !existingMap[clean.toLowerCase()]) {
+    return clean;
+  }
+
+  // Strip trailing digits to find base prefix for sequential numbering (e.g. Ammarmedia -> Ammarmedia6)
+  const basePrefix = clean.replace(/[0-9]+$/, '') || clean;
+
+  for (let i = 1; i <= 9999; i++) {
+    let candidate = `${basePrefix}${i}`;
+    // NodeMaven requires minimum 9 characters for proxy_username
+    if (candidate.length < 9) {
+      const padLen = 9 - basePrefix.length;
+      const paddedNum = String(i).padStart(Math.max(2, padLen), '0');
+      candidate = `${basePrefix}_${paddedNum}`.replace(/__+/g, '_');
+      if (candidate.length < 9) {
+        candidate = `${basePrefix}00${paddedNum}`.slice(0, 12);
+      }
+    }
+    if (!existingMap[candidate.toLowerCase()]) {
+      return candidate;
+    }
+  }
+
+  const rand = Math.floor(10000 + Math.random() * 90000);
+  return `${basePrefix}_${rand}`;
+}
+
+// POST /api/nodemaven/create-subuser
+// Creates a brand-new Sub-User from scratch inside the master NodeMaven dashboard via API v2
+// and generates its Syrian proxy string (<sub_user>-country-sy-sid-<sid>-filter-medium-norotate-true)
+async function handleNodeMavenCreateSubUser(req, res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  const cleanKey = getNodeMavenApiKey();
+  if (!cleanKey) {
+    return res.status(500).json({ success: false, error: 'Missing NodeMaven API key' });
+  }
+
+  try {
+    const {
+      proxy_prefix = 'Alishop',
+      quota_mb = 50,
+      proxy_host = 'gate.nodemaven.com',
+    } = req.body || {};
+
+    const nmMap = (await fetchNodeMavenSubUsersMap()) || {};
+    const newSubUserName = buildValidNodeMavenSubUserName(proxy_prefix, nmMap);
+    // NodeMaven password requirement: >= 9 chars, alphanumeric/underscore (13 hex chars ending in 4 matches NodeMaven standard)
+    const newProxyPassword = `${crypto.randomUUID().replace(/-/g, '').slice(0, 12).toLowerCase()}4`;
+
+    const limitMbNum = Number(quota_mb);
+    const isLimited = !Number.isNaN(limitMbNum) && limitMbNum > 0;
+    const limitBytes = isLimited ? Math.round(limitMbNum * 1000000) : undefined;
+
+    const createPayload = {
+      proxy_username: newSubUserName,
+      proxy_password: newProxyPassword,
+      is_traffic_limited: isLimited,
+      ...(isLimited ? { traffic_limit: limitBytes } : {}),
+    };
+
+    const nmRes = await fetch('https://api.nodemaven.com/api/v2/base/sub-users/', {
+      method: 'POST',
+      headers: {
+        Authorization: `x-api-key ${cleanKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(createPayload),
+    });
+
+    const nmData = await nmRes.json().catch(() => null);
+    if (!nmRes.ok || !nmData?.success) {
+      console.error('[NODEMAVEN-CREATE] Error creating sub-user:', nmRes.status, nmData);
+      return res.status(400).json({
+        success: false,
+        error: nmData?.description || 'تعذر إنشاء البروكسي في اللوحة الأم NodeMaven',
+        details: nmData?.errors || {},
+      });
+    }
+
+    const createdPayload = nmData.payload || {};
+    const officialSubUser = createdPayload.proxy_username || newSubUserName;
+    const officialPassword = createdPayload.proxy_password || newProxyPassword;
+    const newSid = generateNodeMavenSid();
+    const fullProxyUsername = `${officialSubUser}-country-sy-sid-${newSid}-filter-medium-norotate-true`;
+
+    // Probe gate.nodemaven.com to activate the Syrian session immediately
+    const liveCheck = await probeNodeMavenProxyExitIp(
+      fullProxyUsername,
+      officialPassword,
+      proxy_host,
+      5500
+    );
+
+    return res.status(201).json({
+      success: true,
+      sub_user_id: createdPayload.id || null,
+      sub_user: officialSubUser,
+      full_proxy_username: fullProxyUsername,
+      proxy_password: officialPassword,
+      session_id: newSid,
+      quota_mb: isLimited ? limitMbNum : 0,
+      live_check: liveCheck,
+    });
+  } catch (err) {
+    console.error('[NODEMAVEN-CREATE] Unexpected error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to create NodeMaven sub-user' });
+  }
+}
+
+app.post('/nodemaven/create-subuser', handleNodeMavenCreateSubUser);
+app.post('/api/nodemaven/create-subuser', handleNodeMavenCreateSubUser);
+
 // ============================================================
 // 2. HAPP ENCRYPTED LINK GENERATOR: GET /happ/:username
 // Calls official https://crypto.happ.su/api-v2.php to produce happ://crypt5/...
