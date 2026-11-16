@@ -1064,10 +1064,10 @@ export default function App() {
   const defaultPort = clients[0]?.proxy_port || 1080;
 
   return (
-    <div className="min-h-screen bg-[#070A10] text-slate-100 flex flex-col" dir="rtl">
+    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#070A10] text-slate-100 flex flex-col" dir="rtl">
       {/* Top Bar: Strictly 3 Clean Zones */}
-      <header className="sticky top-0 z-40 border-b border-slate-800/80 bg-[#070A10]/90 backdrop-blur-md">
-        <div className="max-w-[1380px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-8">
+      <header className="sticky top-0 z-40 w-full border-b border-slate-800/80 bg-[#070A10]/90 backdrop-blur-md">
+        <div className="max-w-[1380px] mx-auto px-3 sm:px-6 min-h-14 sm:h-16 py-2 sm:py-0 flex items-center justify-between gap-2 sm:gap-4">
           {/* Zone 1: Brand Logo & Name */}
           <a
             href="#top"
@@ -1075,10 +1075,10 @@ export default function App() {
               e.preventDefault();
               setStatusFilter('all');
             }}
-            className="flex items-center gap-3 whitespace-nowrap shrink-0"
+            className="flex items-center gap-2 sm:gap-3 whitespace-nowrap shrink-0 min-w-0"
           >
             <svg
-              className="w-8 h-8 shrink-0"
+              className="w-7 h-7 sm:w-8 sm:h-8 shrink-0"
               viewBox="0 0 40 40"
               fill="none"
               xmlns="http://www.w3.org/2000/svg"
@@ -1107,13 +1107,13 @@ export default function App() {
                 strokeLinejoin="round"
               />
             </svg>
-            <span className="text-base sm:text-lg font-extrabold tracking-wider text-white font-mono">
+            <span className="text-sm sm:text-lg font-extrabold tracking-wide sm:tracking-wider text-white font-mono">
               VPN ALISHOP
             </span>
           </a>
 
           {/* Zone 2: Direct Happ App Copy Buttons & Quick Tools */}
-          <div className="hidden md:flex items-center gap-2.5">
+          <div className="hidden lg:flex items-center gap-2">
             <button
               type="button"
               onClick={handleCopyAndroidLink}
@@ -1179,35 +1179,35 @@ export default function App() {
           </div>
 
           {/* Zone 3: Primary CTAs (Install App + Auto-Generate with Prefix + Manual Add) */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             {!isInstalled && (
               <button
                 type="button"
                 onClick={promptInstall}
-                className="px-3 py-2 text-xs sm:text-sm font-semibold text-emerald-300 hover:text-white bg-emerald-950/70 hover:bg-emerald-700 border border-emerald-700/70 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                className="hidden sm:flex px-3 py-2 text-xs sm:text-sm font-semibold text-emerald-300 hover:text-white bg-emerald-950/70 hover:bg-emerald-700 border border-emerald-700/70 rounded-xl transition-colors items-center gap-1.5 whitespace-nowrap shrink-0"
                 title="تثبيت لوحة تحكم VPN ALISHOP كتطبيق هاتف"
               >
                 <Smartphone className="w-4 h-4 text-emerald-400" />
-                <span className="hidden sm:inline">تثبيت التطبيق</span>
+                <span>تثبيت التطبيق</span>
               </button>
             )}
 
             <button
               type="button"
               onClick={openAutoGenModal}
-              className="px-3.5 py-2 text-xs sm:text-sm font-semibold text-amber-300 hover:text-white bg-amber-950/70 hover:bg-amber-600 border border-amber-700/70 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+              className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-amber-300 hover:text-white bg-amber-950/70 hover:bg-amber-600 border border-amber-700/70 rounded-lg sm:rounded-xl transition-colors flex items-center gap-1 sm:gap-1.5 whitespace-nowrap shrink-0"
               title="توليد مشترك تلقائياً ببادئة تختارها مع نفس إعدادات البروكسي السوري"
             >
-              <Sparkles className="w-4 h-4 text-amber-400" />
+              <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400 shrink-0" />
               <span>توليد تلقائي</span>
             </button>
 
             <button
               type="button"
               onClick={openAddModal}
-              className="px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-colors flex items-center gap-2 whitespace-nowrap shrink-0"
+              className="px-2.5 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg sm:rounded-xl transition-colors flex items-center gap-1 sm:gap-2 whitespace-nowrap shrink-0"
             >
-              <Plus className="w-4 h-4" />
+              <Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
               <span>مشترك جديد</span>
             </button>
           </div>
@@ -1215,34 +1215,34 @@ export default function App() {
       </header>
 
       {/* Main Workspace */}
-      <main className="flex-1 max-w-[1380px] w-full mx-auto px-4 sm:px-6 py-6 space-y-5">
-        {/* Mobile App Links Bar (Visible only on small screens) */}
-        <div className={`grid ${!isInstalled ? 'grid-cols-3' : 'grid-cols-2'} gap-2 md:hidden`}>
+      <main className="flex-1 max-w-[1380px] w-full mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-5">
+        {/* Mobile App Links Bar (Visible on mobile/tablet screens) */}
+        <div className={`grid ${!isInstalled ? 'grid-cols-3' : 'grid-cols-2'} gap-1.5 sm:gap-2 lg:hidden`}>
           {!isInstalled && (
             <button
               type="button"
               onClick={promptInstall}
-              className="py-2 px-2.5 rounded-xl text-xs font-semibold bg-emerald-950/70 border border-emerald-700/70 text-emerald-300 flex items-center justify-center gap-1.5"
+              className="py-2 px-2 rounded-xl text-[11px] sm:text-xs font-semibold bg-emerald-950/70 border border-emerald-700/70 text-emerald-300 flex items-center justify-center gap-1 min-w-0"
             >
               <Smartphone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-              <span>تثبيت التطبيق</span>
+              <span className="truncate">تثبيت التطبيق</span>
             </button>
           )}
           <button
             type="button"
             onClick={handleCopyAndroidLink}
-            className="py-2 px-3 rounded-xl text-xs font-medium bg-[#0E131F] border border-slate-800 text-slate-200 flex items-center justify-center gap-1.5"
+            className="py-2 px-2 rounded-xl text-[11px] sm:text-xs font-medium bg-[#0E131F] border border-slate-800 text-slate-200 flex items-center justify-center gap-1 min-w-0"
           >
             <Download className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-            <span>{copiedAndroidApp ? 'تم نسخ أندرويد' : 'نسخ أندرويد'}</span>
+            <span className="truncate">{copiedAndroidApp ? 'تم نسخ أندرويد' : 'نسخ أندرويد'}</span>
           </button>
           <button
             type="button"
             onClick={handleCopyIosLink}
-            className="py-2 px-3 rounded-xl text-xs font-medium bg-[#0E131F] border border-slate-800 text-slate-200 flex items-center justify-center gap-1.5"
+            className="py-2 px-2 rounded-xl text-[11px] sm:text-xs font-medium bg-[#0E131F] border border-slate-800 text-slate-200 flex items-center justify-center gap-1 min-w-0"
           >
             <Smartphone className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-            <span>{copiedIosApp ? 'تم نسخ آيفون' : 'نسخ آيفون'}</span>
+            <span className="truncate">{copiedIosApp ? 'تم نسخ آيفون' : 'نسخ آيفون'}</span>
           </button>
         </div>
 
