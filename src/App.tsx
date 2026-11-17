@@ -26,6 +26,7 @@ import {
   X,
   Fingerprint,
   Sparkles,
+  Activity,
 } from 'lucide-react';
 import {
   supabase,
@@ -50,6 +51,7 @@ import {
 import { ClientModal } from './components/ClientModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { QrCodeModal, copyToClipboardSync, shareQrAndMessage } from './components/QrCodeModal';
+import { SmartTrafficTrackerModal } from './components/SmartTrafficTrackerModal';
 import { usePWAInstall } from './hooks/usePWAInstall';
 
 const LOCAL_DELTA_STORAGE_KEY = 'shamcash_admin_local_delta_v1';
@@ -120,6 +122,12 @@ export default function App() {
   const [checkingIpId, setCheckingIpId] = useState<string | null>(null);
   const [justRegeneratedId, setJustRegeneratedId] = useState<string | null>(null);
   const [verifiedIpMap, setVerifiedIpMap] = useState<Record<string, VerifiedProxyIpInfo>>({});
+  const [refillingId, setRefillingId] = useState<string | null>(null);
+  const [justRefilledId, setJustRefilledId] = useState<string | null>(null);
+
+  // Smart Traffic Tracker Modal state
+  const [trackerModalOpen, setTrackerModalOpen] = useState<boolean>(false);
+  const [trackerClient, setTrackerClient] = useState<ProxyClient | null>(null);
 
   // Modals state
   const [modalOpen, setModalOpen] = useState<boolean>(false);
@@ -202,7 +210,9 @@ export default function App() {
         ]);
 
         if (!error && data) {
-          const normalized = (data as ProxyClient[]).map(normalizeProxyClient);
+          const normalized = (data as ProxyClient[])
+            .filter((row) => row.username !== '__system_routing_rules__')
+            .map(normalizeProxyClient);
           setRemoteClients(normalized);
         }
       } finally {
@@ -224,11 +234,13 @@ export default function App() {
   const clients = useMemo(() => {
     const map = new Map<string, ProxyClient>();
     for (const c of remoteClients) {
+      if (c.username === '__system_routing_rules__') continue;
       if (!localDelta.deletedIds.includes(c.id)) {
         map.set(c.id, c);
       }
     }
     for (const [id, c] of Object.entries(localDelta.upserted)) {
+      if (c.username === '__system_routing_rules__') continue;
       if (!localDelta.deletedIds.includes(id)) {
         map.set(id, c);
       }
@@ -792,6 +804,90 @@ export default function App() {
     }
   };
 
+  // Refill / Reset Traffic Quota directly in NodeMaven Parent Dashboard + Local Dashboard
+  const handleRefillTraffic = async (client: ProxyClient) => {
+    if (refillingId === client.id) return;
+    setRefillingId(client.id);
+
+    const quotaToRefill = client.quota_mb && client.quota_mb > 0 ? client.quota_mb : 50;
+    const endpoints = [
+      '/api/nodemaven/refill-traffic',
+      'https://shamcash-proxy-api.vercel.app/api/nodemaven/refill-traffic',
+    ];
+
+    try {
+      for (const url of endpoints) {
+        try {
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              client_id: client.id,
+              username: client.username,
+              proxy_username: client.proxy_username,
+              proxy_password: client.proxy_password,
+              proxy_host: client.proxy_host,
+              quota_mb: quotaToRefill,
+            }),
+          });
+          if (!res.ok) continue;
+          const json = await res.json();
+          if (json?.success) {
+            const subKey = String(json.sub_user || '')
+              .trim()
+              .toLowerCase();
+            if (subKey) {
+              setNodeMavenMap((prev) => {
+                const existing = prev[subKey];
+                return {
+                  ...prev,
+                  [subKey]: {
+                    ...(existing || { proxy_username: json.sub_user }),
+                    traffic_limit_bytes: Math.round(quotaToRefill * 1000000),
+                    traffic_used_bytes: 0,
+                    traffic_limit_mb: quotaToRefill,
+                    traffic_used_mb: 0,
+                    is_traffic_limited: true,
+                  },
+                };
+              });
+            }
+
+            setRemoteClients((prev) =>
+              prev.map((c) =>
+                c.id === client.id
+                  ? { ...c, quota_mb: quotaToRefill, used_mb: 0, is_active: true }
+                  : c
+              )
+            );
+
+            setJustRefilledId(client.id);
+            setTimeout(() => {
+              setJustRefilledId((prev) => (prev === client.id ? null : prev));
+            }, 3500);
+
+            showToast(
+              `تم إعادة ملء وتصفير حصة الترافيك في اللوحة الأم NodeMaven لـ ${client.username} (0 / ${quotaToRefill}MB)`
+            );
+            syncNodeMavenUsage();
+            return;
+          }
+        } catch {
+          // try next endpoint
+        }
+      }
+      showToast('تعذر إعادة ملء الحصة حالياً، تأكد من وجود البروكسي في اللوحة الأم NodeMaven');
+    } finally {
+      setRefillingId(null);
+    }
+  };
+
+  // Open Smart Traffic Tracker Modal (either for a single subscriber or global radar)
+  const openTrafficTracker = (client: ProxyClient | null = null) => {
+    setTrackerClient(client);
+    setTrackerModalOpen(true);
+  };
+
   // Regenerate NodeMaven Proxy Username via Live NodeMaven API + Gateway IP Verification
   const handleRegenerateProxy = async (client: ProxyClient) => {
     if (regeneratingId === client.id) return;
@@ -1194,6 +1290,16 @@ export default function App() {
 
             <button
               type="button"
+              onClick={() => openTrafficTracker(null)}
+              className="hidden sm:flex px-3 py-2 text-xs sm:text-sm font-semibold text-sky-300 hover:text-white bg-sky-950/70 hover:bg-sky-600 border border-sky-700/70 rounded-xl transition-colors items-center gap-1.5 whitespace-nowrap shrink-0"
+              title="رادار التتبع الذكي للصرف وحظر العناوين الخارجة عن شام كاش"
+            >
+              <Activity className="w-4 h-4 text-sky-400 shrink-0" />
+              <span>رادار الصرف وحظر العناوين</span>
+            </button>
+
+            <button
+              type="button"
               onClick={openAutoGenModal}
               className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-amber-300 hover:text-white bg-amber-950/70 hover:bg-amber-600 border border-amber-700/70 rounded-lg sm:rounded-xl transition-colors flex items-center gap-1 sm:gap-1.5 whitespace-nowrap shrink-0"
               title="توليد مشترك تلقائياً ببادئة تختارها مع نفس إعدادات البروكسي السوري"
@@ -1216,34 +1322,45 @@ export default function App() {
 
       {/* Main Workspace */}
       <main className="flex-1 max-w-[1380px] w-full mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-5">
-        {/* Mobile App Links Bar (Visible on mobile/tablet screens) */}
-        <div className={`grid ${!isInstalled ? 'grid-cols-3' : 'grid-cols-2'} gap-1.5 sm:gap-2 lg:hidden`}>
-          {!isInstalled && (
+        {/* Mobile App Links & Smart Radar Bar (Visible on mobile/tablet screens) */}
+        <div className="space-y-1.5 lg:hidden">
+          <button
+            type="button"
+            onClick={() => openTrafficTracker(null)}
+            className="w-full sm:hidden py-2 px-3 rounded-xl text-xs font-bold bg-sky-950/75 border border-sky-700/70 text-sky-300 flex items-center justify-center gap-2"
+          >
+            <Activity className="w-4 h-4 text-sky-400 shrink-0" />
+            <span>رادار التتبع الذكي للصرف وحظر العناوين الخارجية</span>
+          </button>
+
+          <div className={`grid ${!isInstalled ? 'grid-cols-3' : 'grid-cols-2'} gap-1.5 sm:gap-2`}>
+            {!isInstalled && (
+              <button
+                type="button"
+                onClick={promptInstall}
+                className="py-2 px-2 rounded-xl text-[11px] sm:text-xs font-semibold bg-emerald-950/70 border border-emerald-700/70 text-emerald-300 flex items-center justify-center gap-1 min-w-0"
+              >
+                <Smartphone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span className="truncate">تثبيت التطبيق</span>
+              </button>
+            )}
             <button
               type="button"
-              onClick={promptInstall}
-              className="py-2 px-2 rounded-xl text-[11px] sm:text-xs font-semibold bg-emerald-950/70 border border-emerald-700/70 text-emerald-300 flex items-center justify-center gap-1 min-w-0"
+              onClick={handleCopyAndroidLink}
+              className="py-2 px-2 rounded-xl text-[11px] sm:text-xs font-medium bg-[#0E131F] border border-slate-800 text-slate-200 flex items-center justify-center gap-1 min-w-0"
             >
-              <Smartphone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-              <span className="truncate">تثبيت التطبيق</span>
+              <Download className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span className="truncate">{copiedAndroidApp ? 'تم نسخ أندرويد' : 'نسخ أندرويد'}</span>
             </button>
-          )}
-          <button
-            type="button"
-            onClick={handleCopyAndroidLink}
-            className="py-2 px-2 rounded-xl text-[11px] sm:text-xs font-medium bg-[#0E131F] border border-slate-800 text-slate-200 flex items-center justify-center gap-1 min-w-0"
-          >
-            <Download className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-            <span className="truncate">{copiedAndroidApp ? 'تم نسخ أندرويد' : 'نسخ أندرويد'}</span>
-          </button>
-          <button
-            type="button"
-            onClick={handleCopyIosLink}
-            className="py-2 px-2 rounded-xl text-[11px] sm:text-xs font-medium bg-[#0E131F] border border-slate-800 text-slate-200 flex items-center justify-center gap-1 min-w-0"
-          >
-            <Smartphone className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-            <span className="truncate">{copiedIosApp ? 'تم نسخ آيفون' : 'نسخ آيفون'}</span>
-          </button>
+            <button
+              type="button"
+              onClick={handleCopyIosLink}
+              className="py-2 px-2 rounded-xl text-[11px] sm:text-xs font-medium bg-[#0E131F] border border-slate-800 text-slate-200 flex items-center justify-center gap-1 min-w-0"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+              <span className="truncate">{copiedIosApp ? 'تم نسخ آيفون' : 'نسخ آيفون'}</span>
+            </button>
+          </div>
         </div>
 
         {/* 4 Clean KPI Cards */}
@@ -1435,7 +1552,7 @@ export default function App() {
                                 </div>
 
                                 {/* NodeMaven Live Quota & Consumption Card Under Subscriber */}
-                                <div className="bg-[#070A10]/90 border border-slate-800/90 rounded-xl p-2.5 space-y-1.5">
+                                <div className="bg-[#070A10]/90 border border-slate-800/90 rounded-xl p-2.5 space-y-2">
                                   {quotaMb > 0 ? (
                                     <>
                                       <div className="flex items-center justify-between text-[11px]">
@@ -1508,6 +1625,44 @@ export default function App() {
                                       </span>
                                     </div>
                                   )}
+
+                                  {/* Direct NodeMaven Refill Traffic Quota + Smart Domain Tracker Buttons */}
+                                  <div className="flex items-center justify-between gap-1.5 pt-1.5 border-t border-slate-800/80">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRefillTraffic(client)}
+                                      disabled={refillingId === client.id}
+                                      title="إعادة ملء وتصفير حصة الترافيك لهذا المشترك في اللوحة الأم NodeMaven فوراً"
+                                      className={`flex-1 py-1 px-2 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 border transition-colors ${
+                                        justRefilledId === client.id
+                                          ? 'bg-emerald-600 border-emerald-400 text-white'
+                                          : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/60'
+                                      }`}
+                                    >
+                                      <RotateCcw
+                                        className={`w-3 h-3 ${
+                                          refillingId === client.id ? 'animate-spin' : ''
+                                        }`}
+                                      />
+                                      <span>
+                                        {refillingId === client.id
+                                          ? 'يعيد الملء...'
+                                          : justRefilledId === client.id
+                                          ? 'تم ملء الحصة ✓'
+                                          : 'إعادة ملء الحصة'}
+                                      </span>
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => openTrafficTracker(client)}
+                                      title="تتبع ذكي للمواقع التي تستهلك باقة هذا المشترك مع إمكانية حظر أي عنوان"
+                                      className="flex-1 py-1 px-2 rounded-lg text-[10px] font-bold bg-sky-950/70 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-800/60 flex items-center justify-center gap-1 transition-colors"
+                                    >
+                                      <Activity className="w-3 h-3" />
+                                      <span>تتبع الصرف</span>
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
                             </td>
@@ -1908,7 +2063,7 @@ export default function App() {
                     </div>
 
                     {/* NodeMaven Quota & Consumption Bar Underneath Mobile Subscriber Header */}
-                    <div className="bg-[#070A10] border border-slate-800/90 rounded-xl p-3 space-y-1.5">
+                    <div className="bg-[#070A10] border border-slate-800/90 rounded-xl p-3 space-y-2">
                       {quotaMb > 0 ? (
                         <>
                           <div className="flex items-center justify-between text-xs">
@@ -1965,6 +2120,42 @@ export default function App() {
                           </span>
                         </div>
                       )}
+
+                      {/* Mobile Refill Quota + Smart Domain Tracker Buttons */}
+                      <div className="grid grid-cols-2 gap-2 pt-1.5 border-t border-slate-800/80">
+                        <button
+                          type="button"
+                          onClick={() => handleRefillTraffic(client)}
+                          disabled={refillingId === client.id}
+                          className={`py-1.5 px-2.5 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1.5 border transition-colors ${
+                            justRefilledId === client.id
+                              ? 'bg-emerald-600 border-emerald-400 text-white'
+                              : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/60'
+                          }`}
+                        >
+                          <RotateCcw
+                            className={`w-3.5 h-3.5 ${
+                              refillingId === client.id ? 'animate-spin' : ''
+                            }`}
+                          />
+                          <span>
+                            {refillingId === client.id
+                              ? 'يعيد الملء...'
+                              : justRefilledId === client.id
+                              ? 'تم ملء الحصة ✓'
+                              : 'إعادة ملء الحصة'}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => openTrafficTracker(client)}
+                          className="py-1.5 px-2.5 rounded-lg text-[11px] font-bold bg-sky-950/70 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-800/60 flex items-center justify-center gap-1.5 transition-colors"
+                        >
+                          <Activity className="w-3.5 h-3.5" />
+                          <span>تتبع الصرف وحظر</span>
+                        </button>
+                      </div>
                     </div>
 
                     {/* Mobile Proxy Name Display + Instant Regenerate Button */}
@@ -2502,6 +2693,15 @@ export default function App() {
         client={deletingClient}
         onClose={() => setDeletingClient(null)}
         onConfirm={handleDeleteClient}
+      />
+
+      {/* Smart Traffic & Domain Tracker Modal */}
+      <SmartTrafficTrackerModal
+        isOpen={trackerModalOpen}
+        initialClient={trackerClient}
+        allClients={clients}
+        onClose={() => setTrackerModalOpen(false)}
+        onShowToast={showToast}
       />
 
       {/* PWA Install Guide Modal (iOS Safari / Mobile Browser Fallback) */}

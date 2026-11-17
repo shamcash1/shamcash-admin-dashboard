@@ -26,7 +26,7 @@ app.use((req, res, next) => {
   );
   res.header(
     'Access-Control-Expose-Headers',
-    'profile-title, profile-update-interval, subscription-userinfo, subscription-always-hwid-enable, subscription-auto-update-enable, subscription-auto-update-open-enable, subscriptions-expand-now, hide-settings, routing-enable, per-app-proxy-mode, per-app-proxy-list, exclude-routes, exclude-routes-set, no-limit-enabled, content-disposition'
+    'profile-title, profile-update-interval, subscription-userinfo, subscription-always-hwid-enable, subscription-auto-update-enable, subscription-auto-update-open-enable, subscriptions-expand-now, hide-settings, routing-enable, ping-type, exclude-apns-enable, exclude-local-networks-enable, per-app-proxy-mode, per-app-proxy-list, per-app-proxy-list-set, exclude-routes, exclude-routes-set, no-limit-enabled, content-disposition'
   );
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
@@ -299,6 +299,233 @@ async function fetchNodeMavenAccountBalance() {
   }
 }
 
+const SYSTEM_ROUTING_USERNAME = '__system_routing_rules__';
+
+const BASE_SHAMCASH_PROXY_DOMAINS = [
+  'api.shamcash.sy',
+  'api-02.shamcash.sy',
+  'api-03.shamcash.sy',
+  'app.shamcash.sy',
+  'bank.shamcash.sy',
+  'payment.shamcash.sy',
+  'deeplink.shamcash.sy',
+  'shamcash.sy',
+  'www.shamcash.sy',
+  'shamcash.org',
+  'api.shamusdt.com',
+];
+
+const BASE_DIRECT_DOMAINS = [
+  'your-objectstorage.com',
+  'fsn1.your-objectstorage.com',
+];
+
+const BASE_BLOCKED_DOMAINS = [
+  'download.shamcash.sy',
+  'support.shamcash.sy',
+  'kazawallet.com',
+  'www.kazawallet.com',
+  'syriancrypto.com',
+  'mony.syriancrypto.com',
+  'syriatel.com.sy',
+  'abili.syriatel.com.sy',
+  'mtnsyr.com',
+  'cash.mtnsyr.com',
+  'imtn.mtnsyr.com',
+  'gateway.mtnsyr.com',
+  'masary.money',
+  'www.masary.money',
+  'my.masary.money',
+  'tekaticket.sy',
+  'api.tekaticket.sy',
+  'bankalsharq.com',
+  'ebanking.bankalsharq.com',
+  'syriapayment.com',
+  'backend.syriapayment.com',
+  'syriancash.com',
+  'yamersal.com',
+  'api.yamersal.com',
+  'rcell.me',
+  'kasroad.com',
+  'auth.kasroad.com',
+  'facebook.net',
+  'connect.facebook.net',
+  'facebook.com',
+  'fbcdn.net',
+  'cloudflare.com',
+  'challenges.cloudflare.com',
+  'dash.cloudflare.com',
+  'cloudflareinsights.com',
+  'googleapis.com',
+  'gstatic.com',
+  'google.com',
+  'googletagmanager.com',
+  'analytics.google.com',
+  'play.google.com',
+  'firebaseio.com',
+  'crashlytics.com',
+  'slsandbox.tech',
+  'instagram.com',
+  'wechat.com',
+  'whatsapp.com',
+  'whatsapp.net',
+  'tiktok.com',
+  'youtube.com',
+  'googlevideo.com',
+  'perfectcdn.com',
+  'storage.perfectcdn.com',
+  'smmraydar.com',
+  'apple.com',
+  'icloud.com',
+  'chatgpt.com',
+  'oaistatic.com',
+  'sourcegraph.com',
+  'grep.app',
+  'apkmirror.com',
+  'apkpure.com',
+  'cdnfonts.com',
+];
+
+function cleanDomainName(raw) {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '')
+    .replace(/^(full:|domain:)/, '')
+    .replace(/:\d+$/, '')
+    .trim();
+}
+
+async function getDynamicRoutingConfig() {
+  const defaultCfg = {
+    blocked: [],
+    direct: [],
+    allowed: [],
+    allow_support_shamcash: false,
+  };
+  try {
+    const { data } = await supabase
+      .from('proxy_clients')
+      .select('id, proxy_host')
+      .eq('username', SYSTEM_ROUTING_USERNAME)
+      .maybeSingle();
+    if (data && data.proxy_host) {
+      const parsed = JSON.parse(data.proxy_host);
+      return {
+        id: data.id,
+        blocked: Array.isArray(parsed.blocked) ? parsed.blocked.map(cleanDomainName).filter(Boolean) : [],
+        direct: Array.isArray(parsed.direct) ? parsed.direct.map(cleanDomainName).filter(Boolean) : [],
+        allowed: Array.isArray(parsed.allowed) ? parsed.allowed.map(cleanDomainName).filter(Boolean) : [],
+        allow_support_shamcash: Boolean(parsed.allow_support_shamcash),
+      };
+    }
+  } catch {
+    // fallback to defaults
+  }
+  return defaultCfg;
+}
+
+async function saveDynamicRoutingConfig(newCfg) {
+  const payloadStr = JSON.stringify({
+    blocked: Array.from(new Set((newCfg.blocked || []).map(cleanDomainName).filter(Boolean))),
+    direct: Array.from(new Set((newCfg.direct || []).map(cleanDomainName).filter(Boolean))),
+    allowed: Array.from(new Set((newCfg.allowed || []).map(cleanDomainName).filter(Boolean))),
+    allow_support_shamcash: Boolean(newCfg.allow_support_shamcash),
+  });
+
+  const existing = await getDynamicRoutingConfig();
+  if (existing.id) {
+    await supabase
+      .from('proxy_clients')
+      .update({
+        proxy_host: payloadStr,
+        is_active: false,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', existing.id);
+  } else {
+    await supabase.from('proxy_clients').insert([
+      {
+        username: SYSTEM_ROUTING_USERNAME,
+        is_active: false,
+        expiry_date: '2099-12-31',
+        proxy_host: payloadStr,
+        proxy_port: 1080,
+      },
+    ]);
+  }
+}
+
+function classifyDomainStatus(rawDomain, dynCfg) {
+  const d = cleanDomainName(rawDomain);
+  if (!d) return { category: 'external_leaked', status: 'blocked' };
+
+  const blockedSet = new Set([
+    ...BASE_BLOCKED_DOMAINS,
+    ...(dynCfg?.blocked || []),
+  ]);
+  if (dynCfg?.allow_support_shamcash) {
+    blockedSet.delete('support.shamcash.sy');
+  }
+  const directSet = new Set([
+    ...BASE_DIRECT_DOMAINS,
+    ...(dynCfg?.direct || []),
+  ]);
+  const allowedSet = new Set([
+    ...BASE_SHAMCASH_PROXY_DOMAINS,
+    ...(dynCfg?.allowed || []),
+    ...(dynCfg?.allow_support_shamcash ? ['support.shamcash.sy'] : []),
+  ]);
+
+  // Explicit custom overrides take highest priority
+  if ((dynCfg?.blocked || []).some((b) => d === b || d.endsWith(`.${b}`))) {
+    return {
+      category: d.includes('shamcash') ? 'shamcash_support' : 'external_leaked',
+      status: 'blocked',
+    };
+  }
+  if ((dynCfg?.direct || []).some((dir) => d === dir || d.endsWith(`.${dir}`))) {
+    return {
+      category: 'static_direct',
+      status: 'routed_direct',
+    };
+  }
+  if ((dynCfg?.allowed || []).some((al) => d === al || d.endsWith(`.${al}`))) {
+    return {
+      category: 'shamcash_core',
+      status: 'allowed_proxy',
+    };
+  }
+
+  // Check default direct
+  for (const dir of directSet) {
+    if (d === dir || d.endsWith(`.${dir}`)) {
+      return { category: 'static_direct', status: 'routed_direct' };
+    }
+  }
+
+  // Check default blocked (e.g. download.shamcash.sy, support.shamcash.sy, kazawallet.com, etc.)
+  for (const blk of blockedSet) {
+    if (d === blk || d.endsWith(`.${blk}`)) {
+      return {
+        category: d.includes('shamcash') ? 'shamcash_support' : 'external_leaked',
+        status: 'blocked',
+      };
+    }
+  }
+
+  // Check ShamCash core allowed
+  for (const al of allowedSet) {
+    if (d === al || d.endsWith(`.${al}`)) {
+      return { category: 'shamcash_core', status: 'allowed_proxy' };
+    }
+  }
+
+  // Catch-all: blocked by Xray rule #6
+  return { category: 'external_leaked', status: 'blocked' };
+}
+
 // ============================================================
 // 1. SUBSCRIPTION ENDPOINT: GET /sub/:username
 // Compatible with Happ (Xray JSON + HWID Lock + Instant Pause) & v2rayNG / V2Box
@@ -307,8 +534,9 @@ async function handleSubscriptionRequest(req, res) {
   const { username } = req.params;
   const callerIp = getCallerIp(req);
   const callerHwid = getCallerHwid(req);
-  const ua = String(req.headers['user-agent'] || '').toLowerCase();
-  const isHappClient = ua.includes('happ') || Boolean(callerHwid) || req.query?.client === 'happ';
+  // Always serve the strict Xray JSON configuration with ShamCash-only routing rules
+  // unless ?format=raw_socks is explicitly requested, so no device ever gets an unfiltered socks:// link.
+  const forceRawSocks = req.query?.format === 'raw_socks';
 
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -323,17 +551,28 @@ async function handleSubscriptionRequest(req, res) {
   res.setHeader('subscriptions-expand-now', '1');
   res.setHeader('subscription-always-hwid-enable', '1');
   res.setHeader('subscription-ping-onopen-enabled', '0');
+  res.setHeader('ping-type', 'tcp');
   res.setHeader('hide-settings', '1');
-  // CRITICAL: Enable Xray routing engine (routing-enable: 1) AND Android OS-level Per-App Proxy for ShamCash ONLY!
-  res.setHeader('routing-enable', '1');
+  // CRITICAL FIX:
+  // Set routing-enable: 0 so Happ does NOT enable its built-in Default Routing Profile ("GlobalProxy": "true"),
+  // which previously overwrote our JSON routing rules and sent non-ShamCash domains (kazawallet, syriancrypto, etc.) to the proxy!
+  // With routing-enable: 0, Xray-core strictly executes the routing.rules inside our JSON configuration.
+  res.setHeader('routing-enable', '0');
+  // Also enforce Android OS-level Per-App Proxy for ShamCash ONLY (both standard and -set overwrite header)
   res.setHeader('per-app-proxy-mode', 'on');
   res.setHeader('per-app-proxy-list', 'com.shmacash.shamcash');
+  res.setHeader('per-app-proxy-list-set', 'com.shmacash.shamcash');
+  res.setHeader('exclude-apns-enable', 'true');
+  res.setHeader('exclude-local-networks-enable', 'true');
   res.setHeader('exclude-routes-set', excludedDnsAndLanRoutes);
   res.setHeader('exclude-routes', excludedDnsAndLanRoutes);
   res.setHeader('no-limit-enabled', '1');
 
   try {
-    const result = await verifyAndBindClient(username, callerIp, callerHwid);
+    const [result, dynCfg] = await Promise.all([
+      verifyAndBindClient(username, callerIp, callerHwid),
+      getDynamicRoutingConfig(),
+    ]);
     const clientData = result.client;
     const cleanTitleName = clientData?.username || username || 'User';
     const profileTitlePlain = `VPN Alishop - ${cleanTitleName}`.slice(0, 25);
@@ -392,7 +631,7 @@ async function handleSubscriptionRequest(req, res) {
         `upload=0; download=${limitBytes}; total=${limitBytes}; expire=1000000000`
       );
 
-      if (isHappClient) {
+      if (!forceRawSocks) {
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
         const disabledConfig = {
           remarks: `⛔ متوقف - ${cleanTitleName}`,
@@ -453,13 +692,29 @@ async function handleSubscriptionRequest(req, res) {
 
     const tag = encodeURIComponent(`VPN Alishop - ${clientData.username}`);
 
-    // 4. If requested by Happ (or with HWID header), return a complete Xray JSON Array configuration
-    // with ULTRA-LOW BANDWIDTH SPLIT-TUNNELING:
-    // - ONLY Sham Cash API domains (*.shamcash.sy, *.shamcash.org) are routed through "proxy".
-    // - Heavy APK downloads (download.shamcash.sy) and ALL other apps/system services (Google Play,
-    //   Firebase, YouTube, WhatsApp, OS background sync) are routed to "direct" (0 proxy bandwidth used!).
-    // - "routeOnly": false + "domainStrategy": "AsIs" ensures TLS SNI domain names are sent to the proxy.
-    if (isHappClient) {
+    // Build dynamic Xray domain lists combining base rules + admin's dynamic rules from Smart Traffic Tracker
+    const activeBlockedDomains = Array.from(
+      new Set([
+        ...BASE_BLOCKED_DOMAINS.filter(
+          (d) => !(dynCfg.allow_support_shamcash && d === 'support.shamcash.sy')
+        ),
+        ...(dynCfg.blocked || []),
+      ])
+    ).filter((d) => !(dynCfg.allowed || []).includes(d) && !(dynCfg.direct || []).includes(d));
+
+    const activeDirectDomains = Array.from(
+      new Set([...BASE_DIRECT_DOMAINS, ...(dynCfg.direct || [])])
+    ).filter((d) => !(dynCfg.blocked || []).includes(d));
+
+    const activeAllowedDomains = Array.from(
+      new Set([
+        ...BASE_SHAMCASH_PROXY_DOMAINS,
+        ...(dynCfg.allow_support_shamcash ? ['support.shamcash.sy'] : []),
+        ...(dynCfg.allowed || []),
+      ])
+    ).filter((d) => !(dynCfg.blocked || []).includes(d));
+
+    if (!forceRawSocks) {
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
 
       const socksServer = {
@@ -478,9 +733,7 @@ async function handleSubscriptionRequest(req, res) {
 
       const remainingMb = Math.max(0, Number((quotaMb - usedMb).toFixed(1)));
       const descriptionText =
-        quotaMb > 0
-          ? `شام كاش فقط · متبقي ${remainingMb}MB من ${quotaMb}MB`
-          : 'ShamCash Only (Ultra-Low Data)';
+        quotaMb > 0 ? `متبقي ${remainingMb}MB من ${quotaMb}MB` : 'ShamCash Only';
 
       const xrayConfig = {
         remarks: `VPN Alishop - ${clientData.username}`,
@@ -510,7 +763,7 @@ async function handleSubscriptionRequest(req, res) {
             },
             sniffing: {
               enabled: true,
-              destOverride: ['http', 'tls'],
+              destOverride: ['http', 'tls', 'quic'],
               routeOnly: false,
             },
           },
@@ -524,7 +777,7 @@ async function handleSubscriptionRequest(req, res) {
             },
             sniffing: {
               enabled: true,
-              destOverride: ['http', 'tls'],
+              destOverride: ['http', 'tls', 'quic'],
               routeOnly: false,
             },
           },
@@ -570,41 +823,17 @@ async function handleSubscriptionRequest(req, res) {
             },
             {
               type: 'field',
-              domain: [
-                'full:download.shamcash.sy',
-                'domain:googleapis.com',
-                'domain:gstatic.com',
-                'domain:google.com',
-                'domain:firebaseio.com',
-                'domain:crashlytics.com',
-                'domain:slsandbox.tech',
-                'domain:instagram.com',
-                'domain:facebook.com',
-                'domain:fbcdn.net',
-                'domain:wechat.com',
-                'domain:whatsapp.com',
-                'domain:whatsapp.net',
-                'domain:tiktok.com',
-                'domain:youtube.com',
-                'domain:googlevideo.com',
-                'domain:perfectcdn.com',
-                'domain:smmraydar.com',
-              ],
+              domain: activeDirectDomains.flatMap((d) => [`domain:${d}`, `full:${d}`]),
+              outboundTag: 'direct',
+            },
+            {
+              type: 'field',
+              domain: activeBlockedDomains.flatMap((d) => [`domain:${d}`, `full:${d}`]),
               outboundTag: 'block',
             },
             {
               type: 'field',
-              domain: [
-                'domain:api.shamcash.sy',
-                'domain:api-02.shamcash.sy',
-                'domain:api-03.shamcash.sy',
-                'domain:bank.shamcash.sy',
-                'domain:payment.shamcash.sy',
-                'domain:support.shamcash.sy',
-                'domain:deeplink.shamcash.sy',
-                'domain:shamcash.sy',
-                'domain:shamcash.org',
-              ],
+              domain: activeAllowedDomains.flatMap((d) => [`domain:${d}`, `full:${d}`]),
               outboundTag: 'proxy',
             },
             {
@@ -624,7 +853,7 @@ async function handleSubscriptionRequest(req, res) {
       return res.status(200).send(JSON.stringify([xrayConfig], null, 2));
     }
 
-    // 5. Standard v2rayNG / V2Box Base64 format
+    // 5. Fallback raw socks format (only if ?format=raw_socks is explicitly passed)
     const rawAuth = pUser && pPass ? `${pUser}:${pPass}` : ':';
     const encodedAuth = Buffer.from(rawAuth, 'utf-8').toString('base64');
     const uri = `socks://${encodedAuth}@${host}:${port}#${tag}`;
@@ -643,19 +872,401 @@ app.get('/api/sub/:username', handleSubscriptionRequest);
 // NodeMaven Live Traffic Sync Endpoint for Admin Dashboard
 async function handleNodeMavenUsage(_req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-  const [map, account] = await Promise.all([
+  const [map, account, routingConfig] = await Promise.all([
     fetchNodeMavenSubUsersMap(),
     fetchNodeMavenAccountBalance(),
+    getDynamicRoutingConfig(),
   ]);
   return res.json({
     connected: Boolean(map),
     account: account || null,
     sub_users: map || {},
+    routing_config: routingConfig,
   });
 }
 
 app.get('/nodemaven/usage', handleNodeMavenUsage);
 app.get('/api/nodemaven/usage', handleNodeMavenUsage);
+
+// Helper: Format Date as dd-mm-YYYY for NodeMaven statistics API
+function formatNodeMavenDate(d) {
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const yyyy = d.getUTCFullYear();
+  return `${dd}-${mm}-${yyyy}`;
+}
+
+// Helper: Fetch domain traffic breakdown for a single sub-user from NodeMaven API
+async function fetchSubUserDomainStatsFromNodeMaven(subUserName, startStr, endStr) {
+  const cleanKey = getNodeMavenApiKey();
+  if (!cleanKey || !subUserName) return [];
+  try {
+    const url = `https://api.nodemaven.com/api/v2/base/statistics/domains/?proxy_username=${encodeURIComponent(
+      subUserName
+    )}&start=${startStr}&end=${endStr}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `x-api-key ${cleanKey}`,
+        Accept: 'application/json',
+      },
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    const rows = Array.isArray(json?.data) ? json.data : [];
+    return rows.map((row) => ({
+      domain: String(row[0] || '').trim(),
+      requests: Number(row[1] || 0),
+      bytes: Number(row[2] || 0),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// GET /api/nodemaven/user-domains
+// Fetches live per-user or all-users domain traffic breakdown from NodeMaven API v2
+// and classifies each domain (allowed_proxy, routed_direct, blocked)
+async function handleNodeMavenUserDomains(req, res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  try {
+    const rawUser = String(req.query?.proxy_username || '').trim();
+    const isAll = req.query?.all === '1' || req.query?.all === 'true' || !rawUser;
+
+    // Determine server date from NodeMaven or current UTC time (max 29 days window per NodeMaven API rule)
+    const now = new Date();
+    const start = new Date(now.getTime() - 28 * 86400 * 1000);
+    const startStr = formatNodeMavenDate(start);
+    const endStr = formatNodeMavenDate(now);
+
+    const [nmMap, dynCfg] = await Promise.all([
+      fetchNodeMavenSubUsersMap(),
+      getDynamicRoutingConfig(),
+    ]);
+
+    if (!isAll) {
+      const subPrefix = rawUser.includes('-country-')
+        ? rawUser.split('-country-')[0].trim()
+        : rawUser;
+      const officialName =
+        nmMap && nmMap[subPrefix.toLowerCase()]
+          ? nmMap[subPrefix.toLowerCase()].proxy_username
+          : subPrefix;
+
+      const rawDomains = await fetchSubUserDomainStatsFromNodeMaven(officialName, startStr, endStr);
+      const enriched = rawDomains
+        .map((item) => {
+          const info = classifyDomainStatus(item.domain, dynCfg);
+          return {
+            domain: item.domain,
+            requests: item.requests,
+            bytes: item.bytes,
+            mb: Number((item.bytes / 1000000).toFixed(3)),
+            category: info.category,
+            status: info.status,
+            sub_users: [officialName],
+          };
+        })
+        .sort((a, b) => b.bytes - a.bytes);
+
+      const totalBytes = enriched.reduce((acc, d) => acc + d.bytes, 0);
+      const wastedBytes = enriched
+        .filter((d) => d.category !== 'shamcash_core')
+        .reduce((acc, d) => acc + d.bytes, 0);
+
+      return res.json({
+        success: true,
+        mode: 'single',
+        sub_user: officialName,
+        period: { start: startStr, end: endStr },
+        total_mb: Number((totalBytes / 1000000).toFixed(2)),
+        wasted_mb: Number((wastedBytes / 1000000).toFixed(2)),
+        shamcash_mb: Number(((totalBytes - wastedBytes) / 1000000).toFixed(2)),
+        domains: enriched,
+        routing_config: {
+          ...dynCfg,
+          base_blocked: BASE_BLOCKED_DOMAINS,
+          base_direct: BASE_DIRECT_DOMAINS,
+          base_allowed: BASE_SHAMCASH_PROXY_DOMAINS,
+        },
+      });
+    }
+
+    // Global mode: aggregate domain traffic across all sub-users in NodeMaven that have used_traffic > 0
+    const activeSubUsers = Object.values(nmMap || {}).filter(
+      (u) => u.traffic_used_bytes > 0 || u.is_default_user
+    );
+
+    const perUserResults = await Promise.all(
+      activeSubUsers.map(async (u) => {
+        const rows = await fetchSubUserDomainStatsFromNodeMaven(u.proxy_username, startStr, endStr);
+        return { subUser: u.proxy_username, rows };
+      })
+    );
+
+    const domainAgg = new Map();
+    const userBreakdown = [];
+
+    for (const { subUser, rows } of perUserResults) {
+      let userTotalBytes = 0;
+      let userWastedBytes = 0;
+      const topUserDomains = [];
+
+      for (const r of rows) {
+        const info = classifyDomainStatus(r.domain, dynCfg);
+        userTotalBytes += r.bytes;
+        if (info.category !== 'shamcash_core') {
+          userWastedBytes += r.bytes;
+        }
+        topUserDomains.push({
+          domain: r.domain,
+          requests: r.requests,
+          bytes: r.bytes,
+          mb: Number((r.bytes / 1000000).toFixed(2)),
+          category: info.category,
+          status: info.status,
+        });
+
+        const key = r.domain.toLowerCase();
+        const prev = domainAgg.get(key) || {
+          domain: r.domain,
+          requests: 0,
+          bytes: 0,
+          sub_users: new Set(),
+          per_user: [],
+        };
+        prev.requests += r.requests;
+        prev.bytes += r.bytes;
+        prev.sub_users.add(subUser);
+        prev.per_user.push({
+          sub_user: subUser,
+          requests: r.requests,
+          mb: Number((r.bytes / 1000000).toFixed(2)),
+        });
+        domainAgg.set(key, prev);
+      }
+
+      if (rows.length > 0) {
+        userBreakdown.push({
+          sub_user: subUser,
+          total_mb: Number((userTotalBytes / 1000000).toFixed(2)),
+          wasted_mb: Number((userWastedBytes / 1000000).toFixed(2)),
+          shamcash_mb: Number(((userTotalBytes - userWastedBytes) / 1000000).toFixed(2)),
+          domains: topUserDomains.sort((a, b) => b.bytes - a.bytes),
+        });
+      }
+    }
+
+    const enrichedGlobal = Array.from(domainAgg.values())
+      .map((item) => {
+        const info = classifyDomainStatus(item.domain, dynCfg);
+        return {
+          domain: item.domain,
+          requests: item.requests,
+          bytes: item.bytes,
+          mb: Number((item.bytes / 1000000).toFixed(3)),
+          category: info.category,
+          status: info.status,
+          sub_users: Array.from(item.sub_users),
+          per_user: item.per_user.sort((a, b) => b.mb - a.mb),
+        };
+      })
+      .sort((a, b) => b.bytes - a.bytes);
+
+    const totalBytes = enrichedGlobal.reduce((acc, d) => acc + d.bytes, 0);
+    const wastedBytes = enrichedGlobal
+      .filter((d) => d.category !== 'shamcash_core')
+      .reduce((acc, d) => acc + d.bytes, 0);
+
+    return res.json({
+      success: true,
+      mode: 'all',
+      period: { start: startStr, end: endStr },
+      total_mb: Number((totalBytes / 1000000).toFixed(2)),
+      wasted_mb: Number((wastedBytes / 1000000).toFixed(2)),
+      shamcash_mb: Number(((totalBytes - wastedBytes) / 1000000).toFixed(2)),
+      domains: enrichedGlobal,
+      users_breakdown: userBreakdown.sort((a, b) => b.total_mb - a.total_mb),
+      routing_config: {
+        ...dynCfg,
+        base_blocked: BASE_BLOCKED_DOMAINS,
+        base_direct: BASE_DIRECT_DOMAINS,
+        base_allowed: BASE_SHAMCASH_PROXY_DOMAINS,
+      },
+    });
+  } catch (err) {
+    console.error('[NODEMAVEN-DOMAINS] Error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to fetch domain statistics' });
+  }
+}
+
+app.get('/nodemaven/user-domains', handleNodeMavenUserDomains);
+app.get('/api/nodemaven/user-domains', handleNodeMavenUserDomains);
+
+// POST /api/nodemaven/routing-rules
+// Dynamically updates blocked / direct / allowed domains in Supabase so /sub/:username enforces them immediately
+async function handleNodeMavenRoutingRules(req, res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  try {
+    const { action, domain, allow_support_shamcash } = req.body || {};
+    const current = await getDynamicRoutingConfig();
+
+    const blocked = new Set(current.blocked || []);
+    const direct = new Set(current.direct || []);
+    const allowed = new Set(current.allowed || []);
+    let allowSupport = current.allow_support_shamcash;
+
+    if (typeof allow_support_shamcash === 'boolean') {
+      allowSupport = allow_support_shamcash;
+    }
+
+    const cleanDom = cleanDomainName(domain);
+    if (cleanDom && action) {
+      blocked.delete(cleanDom);
+      direct.delete(cleanDom);
+      allowed.delete(cleanDom);
+
+      if (action === 'block') {
+        blocked.add(cleanDom);
+      } else if (action === 'direct') {
+        direct.add(cleanDom);
+      } else if (action === 'allow') {
+        allowed.add(cleanDom);
+      }
+    }
+
+    const updatedCfg = {
+      blocked: Array.from(blocked),
+      direct: Array.from(direct),
+      allowed: Array.from(allowed),
+      allow_support_shamcash: allowSupport,
+    };
+
+    await saveDynamicRoutingConfig(updatedCfg);
+
+    return res.json({
+      success: true,
+      routing_config: {
+        ...updatedCfg,
+        base_blocked: BASE_BLOCKED_DOMAINS,
+        base_direct: BASE_DIRECT_DOMAINS,
+        base_allowed: BASE_SHAMCASH_PROXY_DOMAINS,
+      },
+    });
+  } catch (err) {
+    console.error('[NODEMAVEN-ROUTING] Error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to update routing rules' });
+  }
+}
+
+app.post('/nodemaven/routing-rules', handleNodeMavenRoutingRules);
+app.post('/api/nodemaven/routing-rules', handleNodeMavenRoutingRules);
+
+// POST /api/nodemaven/refill-traffic
+// Resets used_traffic to 0 (and optionally updates traffic_limit) in the Parent NodeMaven Dashboard via PUT /api/v2/base/sub-users/
+async function handleNodeMavenRefillTraffic(req, res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  const cleanKey = getNodeMavenApiKey();
+  if (!cleanKey) {
+    return res.status(500).json({ success: false, error: 'Missing NodeMaven API key' });
+  }
+
+  try {
+    const {
+      client_id,
+      username,
+      proxy_username,
+      proxy_password,
+      proxy_host = 'gate.nodemaven.com',
+      quota_mb = 50,
+    } = req.body || {};
+
+    const rawUser = String(proxy_username || '').trim();
+    const subPrefix = rawUser.includes('-country-')
+      ? rawUser.split('-country-')[0].trim()
+      : rawUser || String(username || '').trim();
+
+    const nmMap = await fetchNodeMavenSubUsersMap();
+    const nmSubUser = nmMap && subPrefix ? nmMap[subPrefix.toLowerCase()] : null;
+
+    if (!nmSubUser || !nmSubUser.id) {
+      return res.status(404).json({
+        success: false,
+        error: `المستخدم الفرعي (${subPrefix}) غير موجود في اللوحة الأم NodeMaven`,
+      });
+    }
+
+    const targetQuotaMb =
+      Number(quota_mb) > 0
+        ? Number(quota_mb)
+        : nmSubUser.traffic_limit_mb > 0
+          ? nmSubUser.traffic_limit_mb
+          : 50;
+    const limitBytes = Math.round(targetQuotaMb * 1000000);
+
+    // Call NodeMaven PUT /api/v2/base/sub-users/ with used_traffic: 0 to refill/reset traffic quota in master dashboard
+    const putRes = await fetch('https://api.nodemaven.com/api/v2/base/sub-users/', {
+      method: 'PUT',
+      headers: {
+        Authorization: `x-api-key ${cleanKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        id: nmSubUser.id,
+        proxy_username: nmSubUser.proxy_username,
+        proxy_password: nmSubUser.proxy_password || proxy_password,
+        is_traffic_limited: true,
+        used_traffic: 0,
+        traffic_limit: limitBytes,
+      }),
+    });
+
+    const putData = await putRes.json().catch(() => null);
+    if (!putRes.ok || !putData?.success) {
+      console.error('[NODEMAVEN-REFILL] Error refilling sub-user:', putRes.status, putData);
+      return res.status(400).json({
+        success: false,
+        error: putData?.description || 'تعذر إعادة ملء الحصة في اللوحة الأم NodeMaven',
+      });
+    }
+
+    const officialPassword =
+      putData?.payload?.proxy_password || nmSubUser.proxy_password || proxy_password;
+    const packedHost = packServerProxyHost(
+      proxy_host,
+      rawUser || nmSubUser.proxy_username,
+      officialPassword,
+      targetQuotaMb,
+      0
+    );
+
+    if (client_id) {
+      await supabase
+        .from('proxy_clients')
+        .update({
+          proxy_host: packedHost,
+          is_active: true,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', client_id);
+    }
+
+    return res.json({
+      success: true,
+      sub_user: nmSubUser.proxy_username,
+      quota_mb: targetQuotaMb,
+      used_mb: 0,
+      packed_host: packedHost,
+    });
+  } catch (err) {
+    console.error('[NODEMAVEN-REFILL] Unexpected error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to refill traffic in NodeMaven' });
+  }
+}
+
+app.post('/nodemaven/refill-traffic', handleNodeMavenRefillTraffic);
+app.post('/api/nodemaven/refill-traffic', handleNodeMavenRefillTraffic);
 
 // Helper: Generate 13-hex-char NodeMaven session ID (UUIDv4 prefix ending in 4, identical to NodeMaven dashboard)
 function generateNodeMavenSid(excludeSid = '') {
