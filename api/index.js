@@ -315,9 +315,23 @@ const BASE_SHAMCASH_PROXY_DOMAINS = [
   'api.shamusdt.com',
 ];
 
+// Static storage & Flutter/Firebase SDK startup domains captured via PCAPdroid inside ShamCash:
+// Routed via 'direct' (subscriber's local internet) so they work at full speed with 0 MB proxy consumption
 const BASE_DIRECT_DOMAINS = [
   'your-objectstorage.com',
   'fsn1.your-objectstorage.com',
+  'api.shorebird.dev',
+  'shorebird.dev',
+  'firebaselogging.googleapis.com',
+];
+
+const TELECOM_SERVICE_DOMAINS = [
+  'syriatel.com.sy',
+  'abili.syriatel.com.sy',
+  'mtnsyr.com',
+  'cash.mtnsyr.com',
+  'imtn.mtnsyr.com',
+  'gateway.mtnsyr.com',
 ];
 
 const BASE_BLOCKED_DOMAINS = [
@@ -957,6 +971,12 @@ async function handleNodeMavenUserDomains(req, res) {
       const enriched = rawDomains
         .map((item) => {
           const info = classifyDomainStatus(item.domain, dynCfg);
+          const currentAction =
+            info.status === 'allowed_proxy'
+              ? 'proxy'
+              : info.status === 'routed_direct'
+                ? 'direct'
+                : 'block';
           return {
             domain: item.domain,
             requests: item.requests,
@@ -964,15 +984,33 @@ async function handleNodeMavenUserDomains(req, res) {
             mb: Number((item.bytes / 1000000).toFixed(3)),
             category: info.category,
             status: info.status,
+            current_action: currentAction,
+            is_blocked: currentAction === 'block',
+            is_direct: currentAction === 'direct',
             sub_users: [officialName],
+            users: [officialName],
           };
         })
         .sort((a, b) => b.bytes - a.bytes);
 
       const totalBytes = enriched.reduce((acc, d) => acc + d.bytes, 0);
-      const wastedBytes = enriched
-        .filter((d) => d.category !== 'shamcash_core')
+      const totalRequests = enriched.reduce((acc, d) => acc + d.requests, 0);
+      const shamcashCoreBytes = enriched
+        .filter((d) => d.category === 'shamcash_core' || d.category === 'shamcash_support')
         .reduce((acc, d) => acc + d.bytes, 0);
+      const staticDirectBytes = enriched
+        .filter((d) => d.category === 'static_direct')
+        .reduce((acc, d) => acc + d.bytes, 0);
+      const leakedExternalBytes = enriched
+        .filter((d) => d.category === 'external_leaked')
+        .reduce((acc, d) => acc + d.bytes, 0);
+      const wastedBytes = totalBytes - shamcashCoreBytes;
+
+      const telecomMode = TELECOM_SERVICE_DOMAINS.every((td) => (dynCfg.allowed || []).includes(td))
+        ? 'allow_proxy'
+        : TELECOM_SERVICE_DOMAINS.every((td) => (dynCfg.direct || []).includes(td))
+          ? 'direct'
+          : 'block';
 
       return res.json({
         success: true,
@@ -981,8 +1019,22 @@ async function handleNodeMavenUserDomains(req, res) {
         period: { start: startStr, end: endStr },
         total_mb: Number((totalBytes / 1000000).toFixed(2)),
         wasted_mb: Number((wastedBytes / 1000000).toFixed(2)),
-        shamcash_mb: Number(((totalBytes - wastedBytes) / 1000000).toFixed(2)),
+        shamcash_mb: Number((shamcashCoreBytes / 1000000).toFixed(2)),
+        summary: {
+          total_mb: Number((totalBytes / 1000000).toFixed(2)),
+          shamcash_core_mb: Number((shamcashCoreBytes / 1000000).toFixed(2)),
+          leaked_external_mb: Number((leakedExternalBytes / 1000000).toFixed(2)),
+          static_direct_mb: Number((staticDirectBytes / 1000000).toFixed(2)),
+          total_requests: totalRequests,
+        },
         domains: enriched,
+        rules: {
+          blocked_domains: dynCfg.blocked || [],
+          direct_domains: dynCfg.direct || [],
+          allowed_domains: dynCfg.allowed || [],
+          block_support_chat: !dynCfg.allow_support_shamcash,
+          telecom_mode: telecomMode,
+        },
         routing_config: {
           ...dynCfg,
           base_blocked: BASE_BLOCKED_DOMAINS,
@@ -1015,7 +1067,7 @@ async function handleNodeMavenUserDomains(req, res) {
       for (const r of rows) {
         const info = classifyDomainStatus(r.domain, dynCfg);
         userTotalBytes += r.bytes;
-        if (info.category !== 'shamcash_core') {
+        if (info.category !== 'shamcash_core' && info.category !== 'shamcash_support') {
           userWastedBytes += r.bytes;
         }
         topUserDomains.push({
@@ -1060,6 +1112,13 @@ async function handleNodeMavenUserDomains(req, res) {
     const enrichedGlobal = Array.from(domainAgg.values())
       .map((item) => {
         const info = classifyDomainStatus(item.domain, dynCfg);
+        const currentAction =
+          info.status === 'allowed_proxy'
+            ? 'proxy'
+            : info.status === 'routed_direct'
+              ? 'direct'
+              : 'block';
+        const usersArr = Array.from(item.sub_users);
         return {
           domain: item.domain,
           requests: item.requests,
@@ -1067,16 +1126,34 @@ async function handleNodeMavenUserDomains(req, res) {
           mb: Number((item.bytes / 1000000).toFixed(3)),
           category: info.category,
           status: info.status,
-          sub_users: Array.from(item.sub_users),
+          current_action: currentAction,
+          is_blocked: currentAction === 'block',
+          is_direct: currentAction === 'direct',
+          sub_users: usersArr,
+          users: usersArr,
           per_user: item.per_user.sort((a, b) => b.mb - a.mb),
         };
       })
       .sort((a, b) => b.bytes - a.bytes);
 
     const totalBytes = enrichedGlobal.reduce((acc, d) => acc + d.bytes, 0);
-    const wastedBytes = enrichedGlobal
-      .filter((d) => d.category !== 'shamcash_core')
+    const totalRequests = enrichedGlobal.reduce((acc, d) => acc + d.requests, 0);
+    const shamcashCoreBytes = enrichedGlobal
+      .filter((d) => d.category === 'shamcash_core' || d.category === 'shamcash_support')
       .reduce((acc, d) => acc + d.bytes, 0);
+    const staticDirectBytes = enrichedGlobal
+      .filter((d) => d.category === 'static_direct')
+      .reduce((acc, d) => acc + d.bytes, 0);
+    const leakedExternalBytes = enrichedGlobal
+      .filter((d) => d.category === 'external_leaked')
+      .reduce((acc, d) => acc + d.bytes, 0);
+    const wastedBytes = totalBytes - shamcashCoreBytes;
+
+    const telecomMode = TELECOM_SERVICE_DOMAINS.every((td) => (dynCfg.allowed || []).includes(td))
+      ? 'allow_proxy'
+      : TELECOM_SERVICE_DOMAINS.every((td) => (dynCfg.direct || []).includes(td))
+        ? 'direct'
+        : 'block';
 
     return res.json({
       success: true,
@@ -1084,9 +1161,23 @@ async function handleNodeMavenUserDomains(req, res) {
       period: { start: startStr, end: endStr },
       total_mb: Number((totalBytes / 1000000).toFixed(2)),
       wasted_mb: Number((wastedBytes / 1000000).toFixed(2)),
-      shamcash_mb: Number(((totalBytes - wastedBytes) / 1000000).toFixed(2)),
+      shamcash_mb: Number((shamcashCoreBytes / 1000000).toFixed(2)),
+      summary: {
+        total_mb: Number((totalBytes / 1000000).toFixed(2)),
+        shamcash_core_mb: Number((shamcashCoreBytes / 1000000).toFixed(2)),
+        leaked_external_mb: Number((leakedExternalBytes / 1000000).toFixed(2)),
+        static_direct_mb: Number((staticDirectBytes / 1000000).toFixed(2)),
+        total_requests: totalRequests,
+      },
       domains: enrichedGlobal,
       users_breakdown: userBreakdown.sort((a, b) => b.total_mb - a.total_mb),
+      rules: {
+        blocked_domains: dynCfg.blocked || [],
+        direct_domains: dynCfg.direct || [],
+        allowed_domains: dynCfg.allowed || [],
+        block_support_chat: !dynCfg.allow_support_shamcash,
+        telecom_mode: telecomMode,
+      },
       routing_config: {
         ...dynCfg,
         base_blocked: BASE_BLOCKED_DOMAINS,
@@ -1108,7 +1199,13 @@ app.get('/api/nodemaven/user-domains', handleNodeMavenUserDomains);
 async function handleNodeMavenRoutingRules(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   try {
-    const { action, domain, allow_support_shamcash } = req.body || {};
+    const {
+      action,
+      domain,
+      allow_support_shamcash,
+      block_support_chat,
+      telecom_mode,
+    } = req.body || {};
     const current = await getDynamicRoutingConfig();
 
     const blocked = new Set(current.blocked || []);
@@ -1118,6 +1215,23 @@ async function handleNodeMavenRoutingRules(req, res) {
 
     if (typeof allow_support_shamcash === 'boolean') {
       allowSupport = allow_support_shamcash;
+    } else if (typeof block_support_chat === 'boolean') {
+      allowSupport = !block_support_chat;
+    }
+
+    if (action === 'set_telecom_mode' && telecom_mode) {
+      for (const td of TELECOM_SERVICE_DOMAINS) {
+        blocked.delete(td);
+        direct.delete(td);
+        allowed.delete(td);
+        if (telecom_mode === 'block') {
+          blocked.add(td);
+        } else if (telecom_mode === 'direct') {
+          direct.add(td);
+        } else if (telecom_mode === 'allow_proxy' || telecom_mode === 'allow') {
+          allowed.add(td);
+        }
+      }
     }
 
     const cleanDom = cleanDomainName(domain);
@@ -1126,11 +1240,15 @@ async function handleNodeMavenRoutingRules(req, res) {
       direct.delete(cleanDom);
       allowed.delete(cleanDom);
 
+      if (cleanDom === 'support.shamcash.sy') {
+        allowSupport = action === 'allow' || action === 'allow_proxy';
+      }
+
       if (action === 'block') {
         blocked.add(cleanDom);
       } else if (action === 'direct') {
         direct.add(cleanDom);
-      } else if (action === 'allow') {
+      } else if (action === 'allow' || action === 'allow_proxy') {
         allowed.add(cleanDom);
       }
     }
@@ -1144,8 +1262,23 @@ async function handleNodeMavenRoutingRules(req, res) {
 
     await saveDynamicRoutingConfig(updatedCfg);
 
+    const activeTelecomMode = TELECOM_SERVICE_DOMAINS.every((td) =>
+      updatedCfg.allowed.includes(td)
+    )
+      ? 'allow_proxy'
+      : TELECOM_SERVICE_DOMAINS.every((td) => updatedCfg.direct.includes(td))
+        ? 'direct'
+        : 'block';
+
     return res.json({
       success: true,
+      rules: {
+        blocked_domains: updatedCfg.blocked,
+        direct_domains: updatedCfg.direct,
+        allowed_domains: updatedCfg.allowed,
+        block_support_chat: !updatedCfg.allow_support_shamcash,
+        telecom_mode: activeTelecomMode,
+      },
       routing_config: {
         ...updatedCfg,
         base_blocked: BASE_BLOCKED_DOMAINS,
@@ -1719,7 +1852,9 @@ function getDirectPac() {
 function getShamCashPac(proxyHost, proxyPort) {
   return `function FindProxyForURL(url, host) {
     if (shExpMatch(host, "*api.shamcash.sy*") || 
-        shExpMatch(host, "*bank.shamcash.sy*")) {
+        shExpMatch(host, "*bank.shamcash.sy*") ||
+        shExpMatch(host, "*payment.shamcash.sy*") ||
+        shExpMatch(host, "*app.shamcash.sy*")) {
         return "PROXY ${proxyHost}:${proxyPort}";
     }
     return "DIRECT";

@@ -1161,9 +1161,9 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#070A10] text-slate-100 flex flex-col" dir="rtl">
-      {/* Top Bar: Strictly 3 Clean Zones */}
-      <header className="sticky top-0 z-40 w-full border-b border-slate-800/80 bg-[#070A10]/90 backdrop-blur-md">
-        <div className="max-w-[1380px] mx-auto px-3 sm:px-6 min-h-14 sm:h-16 py-2 sm:py-0 flex items-center justify-between gap-2 sm:gap-4">
+      {/* Top Bar: Strictly Responsive for Mobile & Desktop */}
+      <header className="sticky top-0 z-40 w-full border-b border-slate-800/80 bg-[#070A10]/95 backdrop-blur-md">
+        <div className="max-w-[1380px] mx-auto px-2.5 sm:px-6 min-h-14 sm:h-16 py-2 sm:py-0 flex flex-wrap items-center justify-between gap-1.5 sm:gap-3">
           {/* Zone 1: Brand Logo & Name */}
           <a
             href="#top"
@@ -1171,10 +1171,10 @@ export default function App() {
               e.preventDefault();
               setStatusFilter('all');
             }}
-            className="flex items-center gap-2 sm:gap-3 whitespace-nowrap shrink-0 min-w-0"
+            className="flex items-center gap-1.5 sm:gap-2.5 whitespace-nowrap shrink-0 min-w-0"
           >
             <svg
-              className="w-7 h-7 sm:w-8 sm:h-8 shrink-0"
+              className="w-6 h-6 sm:w-8 sm:h-8 shrink-0"
               viewBox="0 0 40 40"
               fill="none"
               xmlns="http://www.w3.org/2000/svg"
@@ -1203,13 +1203,13 @@ export default function App() {
                 strokeLinejoin="round"
               />
             </svg>
-            <span className="text-sm sm:text-lg font-extrabold tracking-wide sm:tracking-wider text-white font-mono">
+            <span className="text-xs sm:text-lg font-extrabold tracking-tight sm:tracking-wider text-white font-mono truncate">
               VPN ALISHOP
             </span>
           </a>
 
-          {/* Zone 2: Direct Happ App Copy Buttons & Quick Tools */}
-          <div className="hidden lg:flex items-center gap-2">
+          {/* Zone 2: Direct Happ App Copy Buttons & Quick Tools (Desktop Only) */}
+          <div className="hidden xl:flex items-center gap-2">
             <button
               type="button"
               onClick={handleCopyAndroidLink}
@@ -1274,13 +1274,13 @@ export default function App() {
             </button>
           </div>
 
-          {/* Zone 3: Primary CTAs (Install App + Auto-Generate with Prefix + Manual Add) */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {/* Zone 3: Primary CTAs (Compact & Overflow-Free on Mobile) */}
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0 max-w-full">
             {!isInstalled && (
               <button
                 type="button"
                 onClick={promptInstall}
-                className="hidden sm:flex px-3 py-2 text-xs sm:text-sm font-semibold text-emerald-300 hover:text-white bg-emerald-950/70 hover:bg-emerald-700 border border-emerald-700/70 rounded-xl transition-colors items-center gap-1.5 whitespace-nowrap shrink-0"
+                className="hidden lg:flex px-3 py-2 text-xs font-semibold text-emerald-300 hover:text-white bg-emerald-950/70 hover:bg-emerald-700 border border-emerald-700/70 rounded-xl transition-colors items-center gap-1.5 whitespace-nowrap shrink-0"
                 title="تثبيت لوحة تحكم VPN ALISHOP كتطبيق هاتف"
               >
                 <Smartphone className="w-4 h-4 text-emerald-400" />
@@ -1291,7 +1291,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => openTrafficTracker(null)}
-              className="hidden sm:flex px-3 py-2 text-xs sm:text-sm font-semibold text-sky-300 hover:text-white bg-sky-950/70 hover:bg-sky-600 border border-sky-700/70 rounded-xl transition-colors items-center gap-1.5 whitespace-nowrap shrink-0"
+              className="hidden lg:flex px-3 py-2 text-xs font-semibold text-sky-300 hover:text-white bg-sky-950/70 hover:bg-sky-600 border border-sky-700/70 rounded-xl transition-colors items-center gap-1.5 whitespace-nowrap shrink-0"
               title="رادار التتبع الذكي للصرف وحظر العناوين الخارجة عن شام كاش"
             >
               <Activity className="w-4 h-4 text-sky-400 shrink-0" />
@@ -1300,20 +1300,30 @@ export default function App() {
 
             <button
               type="button"
+              onClick={() => fetchClients(true)}
+              disabled={refreshing}
+              className="xl:hidden p-1.5 rounded-lg bg-[#0E131F] hover:bg-slate-800/80 border border-slate-800 text-slate-300 hover:text-white transition-colors shrink-0"
+              title="مزامنة وتحديث البيانات من NodeMaven"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin text-emerald-400' : ''}`} />
+            </button>
+
+            <button
+              type="button"
               onClick={openAutoGenModal}
-              className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-amber-300 hover:text-white bg-amber-950/70 hover:bg-amber-600 border border-amber-700/70 rounded-lg sm:rounded-xl transition-colors flex items-center gap-1 sm:gap-1.5 whitespace-nowrap shrink-0"
+              className="px-2 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-bold text-amber-300 hover:text-white bg-amber-950/70 hover:bg-amber-600 border border-amber-700/70 rounded-lg sm:rounded-xl transition-colors flex items-center gap-1 sm:gap-1.5 whitespace-nowrap shrink-0"
               title="توليد مشترك تلقائياً ببادئة تختارها مع نفس إعدادات البروكسي السوري"
             >
-              <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400 shrink-0" />
+              <Sparkles className="w-3 h-3 sm:w-4 sm:h-4 text-amber-400 shrink-0" />
               <span>توليد تلقائي</span>
             </button>
 
             <button
               type="button"
               onClick={openAddModal}
-              className="px-2.5 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg sm:rounded-xl transition-colors flex items-center gap-1 sm:gap-2 whitespace-nowrap shrink-0"
+              className="px-2 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg sm:rounded-xl transition-colors flex items-center gap-1 sm:gap-1.5 whitespace-nowrap shrink-0"
             >
-              <Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <Plus className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
               <span>مشترك جديد</span>
             </button>
           </div>
@@ -1322,16 +1332,28 @@ export default function App() {
 
       {/* Main Workspace */}
       <main className="flex-1 max-w-[1380px] w-full mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-5">
-        {/* Mobile App Links & Smart Radar Bar (Visible on mobile/tablet screens) */}
-        <div className="space-y-1.5 lg:hidden">
-          <button
-            type="button"
-            onClick={() => openTrafficTracker(null)}
-            className="w-full sm:hidden py-2 px-3 rounded-xl text-xs font-bold bg-sky-950/75 border border-sky-700/70 text-sky-300 flex items-center justify-center gap-2"
-          >
-            <Activity className="w-4 h-4 text-sky-400 shrink-0" />
-            <span>رادار التتبع الذكي للصرف وحظر العناوين الخارجية</span>
-          </button>
+        {/* Mobile & Tablet Quick Tools Bar (Visible below lg breakpoint) */}
+        <div className="space-y-2 lg:hidden">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+            <button
+              type="button"
+              onClick={() => openTrafficTracker(null)}
+              className="flex-1 min-w-[180px] py-2 px-3 rounded-xl text-xs font-bold bg-sky-950/80 hover:bg-sky-800 border border-sky-700/70 text-sky-300 flex items-center justify-center gap-1.5"
+            >
+              <Activity className="w-4 h-4 text-sky-400 shrink-0" />
+              <span className="truncate">رادار التتبع الذكي للصرف وحظر العناوين</span>
+            </button>
+
+            {nodeMavenAccountMb !== null && (
+              <div className="py-2 px-2.5 rounded-xl text-[11px] font-medium bg-emerald-950/60 border border-emerald-800/70 text-emerald-300 flex items-center justify-center gap-1 whitespace-nowrap">
+                <HardDrive className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>الرصيد:</span>
+                <strong className="font-mono text-white" dir="ltr">
+                  {formatDataMb(nodeMavenAccountMb)}
+                </strong>
+              </div>
+            )}
+          </div>
 
           <div className={`grid ${!isInstalled ? 'grid-cols-3' : 'grid-cols-2'} gap-1.5 sm:gap-2`}>
             {!isInstalled && (
