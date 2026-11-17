@@ -337,7 +337,7 @@ export async function createNodeMavenSubUserLive(params: {
 
   return {
     success: false,
-    error: 'تعذر الاتصال بـ API اللوحة الأم NodeMaven لإنشاء البروكسي الجديد',
+    error: 'تعذر الاتصال بالخادم الرئيسي لإنشاء البروكسي الجديد',
   };
 }
 

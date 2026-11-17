@@ -284,7 +284,7 @@ export const SmartTrafficTrackerModal: React.FC<SmartTrafficTrackerModalProps> =
               onClick={fetchDomainTelemetry}
               disabled={loading}
               className="p-1.5 sm:p-2 rounded-xl bg-[#0E131F] hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition-colors"
-              title="تحديث بيانات الرادار من NodeMaven"
+              title="تحديث بيانات الرادار المباشرة"
             >
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-emerald-400' : ''}`} />
             </button>
@@ -333,7 +333,7 @@ export const SmartTrafficTrackerModal: React.FC<SmartTrafficTrackerModalProps> =
                     2. تصفير صرف فحص التشغيل (<code className="font-mono">api.shorebird.dev</code> و <code className="font-mono">firebaselogging.googleapis.com</code>):
                   </strong>{' '}
                   رصد ملف PCAPdroid اتصال التطبيق عند الإقلاع بـ <code className="font-mono">api.shorebird.dev</code> و <code className="font-mono">firebaselogging.googleapis.com</code>؛ تم توجيههما تلقائياً عبر{' '}
-                  <strong className="text-sky-300">الإنترنت المحلي المجاني (Direct 0MB)</strong> لكي يفتح شام كاش بأقصى سرعة دون سحب بايت واحد من رصيد NodeMaven.
+                  <strong className="text-sky-300">الإنترنت المحلي المجاني (Direct 0MB)</strong> لكي يفتح شام كاش بأقصى سرعة دون سحب بايت واحد من الرصيد العام.
                 </li>
                 <li>
                   <strong className="text-amber-300">
@@ -652,7 +652,7 @@ export const SmartTrafficTrackerModal: React.FC<SmartTrafficTrackerModalProps> =
             <div className="bg-[#070A10] border border-slate-800 rounded-2xl p-8 text-center space-y-3">
               <div className="w-7 h-7 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto" />
               <div className="text-xs text-slate-300 font-medium">
-                جاري سحب سجل الدومينات الفعلي من بوابة NodeMaven...
+                جاري سحب سجل الدومينات الفعلي من الخادم الرئيسي...
               </div>
             </div>
           ) : filteredDomains.length === 0 ? (

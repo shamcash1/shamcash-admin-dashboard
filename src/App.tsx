@@ -592,7 +592,7 @@ export default function App() {
       const port = clients[0]?.proxy_port || 1080;
       const requestedQuotaMb = Math.max(0, Number(autoGenQuotaMb) || 50);
 
-      // Call backend to create a brand-new Sub-User from scratch in NodeMaven Parent Dashboard
+      // Call backend to create a brand-new Sub-User from scratch in the master server
       const nmCreated = await createNodeMavenSubUserLive({
         proxy_prefix: previewNodeMavenSubUser,
         quota_mb: requestedQuotaMb,
@@ -601,7 +601,7 @@ export default function App() {
 
       if (!nmCreated.success || !nmCreated.full_proxy_username || !nmCreated.proxy_password) {
         setAutoGenError(
-          nmCreated.error || 'تعذر إنشاء يوزر البروكسي الجديد في اللوحة الأم NodeMaven.'
+          nmCreated.error || 'تعذر إنشاء يوزر البروكسي الجديد في الخادم الرئيسي.'
         );
         return;
       }
@@ -623,7 +623,7 @@ export default function App() {
       await syncNodeMavenUsage();
       setAutoGenModalOpen(false);
       showToast(
-        `تم إنشاء البروكسي (${nmCreated.sub_user}) في اللوحة الأم وإضافة المشترك (${trimmedSubName}) بنجاح!`
+        `تم إنشاء البروكسي (${nmCreated.sub_user}) في الخادم الرئيسي وإضافة المشترك (${trimmedSubName}) بنجاح!`
       );
     } finally {
       setAutoGenerating(false);
@@ -753,7 +753,7 @@ export default function App() {
     showToast(`تم فك قفل الجهاز · ${client.username}`);
   };
 
-  // Check Live Exit IP on NodeMaven Gateway (gate.nodemaven.com)
+  // Check Live Exit IP on Proxy Gateway
   const handleCheckProxyIp = async (client: ProxyClient) => {
     if (checkingIpId === client.id) return;
     setCheckingIpId(client.id);
@@ -790,7 +790,7 @@ export default function App() {
               },
             }));
             showToast(
-              `الـ IP الفعلي في NodeMaven: ${data.exit_ip} (${data.city || 'SY'} - ${data.isp || ''})`
+              `عنوان الـ IP الفعلي: ${data.exit_ip} (${data.city || 'SY'} - ${data.isp || ''})`
             );
             return;
           }
@@ -804,7 +804,7 @@ export default function App() {
     }
   };
 
-  // Refill / Reset Traffic Quota directly in NodeMaven Parent Dashboard + Local Dashboard
+  // Refill / Reset Traffic Quota directly in Master Server + Local Dashboard
   const handleRefillTraffic = async (client: ProxyClient) => {
     if (refillingId === client.id) return;
     setRefillingId(client.id);
@@ -867,7 +867,7 @@ export default function App() {
             }, 3500);
 
             showToast(
-              `تم إعادة ملء وتصفير حصة الترافيك في اللوحة الأم NodeMaven لـ ${client.username} (0 / ${quotaToRefill}MB)`
+              `تم إعادة ملء وتصفير حصة البيانات في الخادم الرئيسي لـ ${client.username} (0 / ${quotaToRefill}MB)`
             );
             syncNodeMavenUsage();
             return;
@@ -876,7 +876,7 @@ export default function App() {
           // try next endpoint
         }
       }
-      showToast('تعذر إعادة ملء الحصة حالياً، تأكد من وجود البروكسي في اللوحة الأم NodeMaven');
+      showToast('تعذر إعادة ملء الحصة حالياً، تأكد من تسجيل المعرف الفرعي في الخادم الرئيسي');
     } finally {
       setRefillingId(null);
     }
@@ -888,7 +888,7 @@ export default function App() {
     setTrackerModalOpen(true);
   };
 
-  // Regenerate NodeMaven Proxy Username via Live NodeMaven API + Gateway IP Verification
+  // Regenerate Proxy Session Username via Live Gateway Verification
   const handleRegenerateProxy = async (client: ProxyClient) => {
     if (regeneratingId === client.id) return;
     setRegeneratingId(client.id);
@@ -1010,10 +1010,10 @@ export default function App() {
 
       if (apiResult?.live_check?.ok && apiResult.live_check.exit_ip) {
         showToast(
-          `تم توليد بروكسي جديد من NodeMaven · IP الجديد: ${apiResult.live_check.exit_ip} (${apiResult.live_check.city || 'SY'})`
+          `تم توليد جلسة بروكسي جديدة · الـ IP الجديد: ${apiResult.live_check.exit_ip} (${apiResult.live_check.city || 'SY'})`
         );
       } else {
-        showToast(`تم إعادة توليد البروكسي ومزامنته مع NodeMaven لـ ${client.username}`);
+        showToast(`تم إعادة توليد جلسة البروكسي ومزامنتها لـ ${client.username}`);
       }
     } finally {
       setRegeneratingId(null);
@@ -1022,7 +1022,7 @@ export default function App() {
 
   const renderProxyStringWithHighlightedSid = (rawUsername: string, isHighlighted: boolean) => {
     if (!rawUsername) {
-      return <span className="text-slate-500">بدون اسم بروكسي</span>;
+      return <span className="text-slate-500">بدون معرف جلسة</span>;
     }
     const match = rawUsername.match(/^(.*?-sid-)([a-zA-Z0-9]+)(.*)$/i);
     if (!match) {
@@ -1161,20 +1161,20 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#070A10] text-slate-100 flex flex-col" dir="rtl">
-      {/* Top Bar: Strictly Responsive for Mobile & Desktop */}
+      {/* Top Corporate Header: Responsive on Mobile, Symmetrical 3-Zone Enterprise Navbar on Desktop */}
       <header className="sticky top-0 z-40 w-full border-b border-slate-800/80 bg-[#070A10]/95 backdrop-blur-md">
-        <div className="max-w-[1380px] mx-auto px-2.5 sm:px-6 min-h-14 sm:h-16 py-2 sm:py-0 flex flex-wrap items-center justify-between gap-1.5 sm:gap-3">
-          {/* Zone 1: Brand Logo & Name */}
+        <div className="max-w-[1440px] mx-auto px-2.5 sm:px-6 min-h-14 sm:h-[68px] py-2 sm:py-0 flex items-center justify-between gap-2 sm:gap-4">
+          {/* Zone 1: Corporate Brand Identity */}
           <a
             href="#top"
             onClick={(e) => {
               e.preventDefault();
               setStatusFilter('all');
             }}
-            className="flex items-center gap-1.5 sm:gap-2.5 whitespace-nowrap shrink-0 min-w-0"
+            className="flex items-center gap-2 sm:gap-3 whitespace-nowrap shrink-0 min-w-0"
           >
             <svg
-              className="w-6 h-6 sm:w-8 sm:h-8 shrink-0"
+              className="w-7 h-7 sm:w-9 sm:h-9 shrink-0"
               viewBox="0 0 40 40"
               fill="none"
               xmlns="http://www.w3.org/2000/svg"
@@ -1186,7 +1186,7 @@ export default function App() {
                 width="38"
                 height="38"
                 rx="10"
-                className="fill-emerald-950 stroke-emerald-500/50"
+                className="fill-emerald-950 stroke-emerald-500/60"
                 strokeWidth="1.5"
               />
               <path
@@ -1203,20 +1203,25 @@ export default function App() {
                 strokeLinejoin="round"
               />
             </svg>
-            <span className="text-xs sm:text-lg font-extrabold tracking-tight sm:tracking-wider text-white font-mono truncate">
-              VPN ALISHOP
-            </span>
+            <div className="flex flex-col min-w-0">
+              <span className="text-xs sm:text-base font-extrabold tracking-tight sm:tracking-wider text-white font-mono truncate">
+                VPN ALISHOP
+              </span>
+              <span className="hidden sm:block text-[10px] text-slate-400 font-medium">
+                بوابة إدارة اشتراكات وخوادم شام كاش
+              </span>
+            </div>
           </a>
 
-          {/* Zone 2: Direct Happ App Copy Buttons & Quick Tools (Desktop Only) */}
-          <div className="hidden xl:flex items-center gap-2">
+          {/* Zone 2: Unified Enterprise Utility Bar (Desktop Only) */}
+          <div className="hidden xl:flex items-center gap-1.5 bg-[#0C101B] border border-slate-800/90 rounded-xl p-1">
             <button
               type="button"
               onClick={handleCopyAndroidLink}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors border whitespace-nowrap ${
+              className={`h-8 px-3 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap ${
                 copiedAndroidApp
-                  ? 'bg-emerald-950/90 border-emerald-600 text-emerald-300'
-                  : 'bg-[#0E131F] hover:bg-slate-800/80 border-slate-800 text-slate-300 hover:text-white'
+                  ? 'bg-emerald-950 text-emerald-300 border border-emerald-700/60'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
               }`}
             >
               {copiedAndroidApp ? (
@@ -1227,13 +1232,15 @@ export default function App() {
               <span>{copiedAndroidApp ? 'تم نسخ أندرويد' : 'تطبيق أندرويد (Happ)'}</span>
             </button>
 
+            <span className="w-px h-4 bg-slate-800" aria-hidden="true" />
+
             <button
               type="button"
               onClick={handleCopyIosLink}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors border whitespace-nowrap ${
+              className={`h-8 px-3 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap ${
                 copiedIosApp
-                  ? 'bg-sky-950/90 border-sky-600 text-sky-300'
-                  : 'bg-[#0E131F] hover:bg-slate-800/80 border-slate-800 text-slate-300 hover:text-white'
+                  ? 'bg-sky-950 text-sky-300 border border-sky-700/60'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
               }`}
             >
               {copiedIosApp ? (
@@ -1244,54 +1251,51 @@ export default function App() {
               <span>{copiedIosApp ? 'تم نسخ آيفون' : 'تطبيق آيفون (Happ)'}</span>
             </button>
 
+            <span className="w-px h-4 bg-slate-800" aria-hidden="true" />
+
             <button
               type="button"
               onClick={handleExportCsv}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[#0E131F] hover:bg-slate-800/80 border border-slate-800 text-slate-400 hover:text-white transition-colors flex items-center gap-1.5 whitespace-nowrap"
+              className="h-8 px-3 rounded-lg text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800/70 transition-colors flex items-center gap-1.5 whitespace-nowrap"
             >
               <FileDown className="w-3.5 h-3.5" />
-              <span>تصدير CSV</span>
+              <span>نسخة احتياطية CSV</span>
             </button>
 
-            {nodeMavenAccountMb !== null && (
-              <div className="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-950/60 border border-emerald-800/70 text-emerald-300 flex items-center gap-1.5 whitespace-nowrap">
-                <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
-                <span>رصيد NodeMaven العام:</span>
-                <strong className="font-mono text-white" dir="ltr">
-                  {formatDataMb(nodeMavenAccountMb)}
-                </strong>
-              </div>
+            {!isInstalled && (
+              <>
+                <span className="w-px h-4 bg-slate-800" aria-hidden="true" />
+                <button
+                  type="button"
+                  onClick={promptInstall}
+                  className="h-8 px-3 rounded-lg text-xs font-semibold text-emerald-300 hover:text-white hover:bg-emerald-600/30 transition-colors flex items-center gap-1.5 whitespace-nowrap"
+                >
+                  <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>تثبيت النظام</span>
+                </button>
+              </>
             )}
+
+            <span className="w-px h-4 bg-slate-800" aria-hidden="true" />
 
             <button
               type="button"
               onClick={() => fetchClients(true)}
               disabled={refreshing}
-              className="p-1.5 rounded-lg bg-[#0E131F] hover:bg-slate-800/80 border border-slate-800 text-slate-400 hover:text-white transition-colors"
-              title="مزامنة وتحديث البيانات من NodeMaven"
+              className="h-8 px-2.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800/70 transition-colors flex items-center gap-1.5"
+              title="مزامنة وتحديث البيانات من الخادم الرئيسي"
             >
-              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin text-emerald-400' : ''}`} />
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin text-emerald-400' : 'text-emerald-400'}`} />
+              <span>تحديث</span>
             </button>
           </div>
 
-          {/* Zone 3: Primary CTAs (Compact & Overflow-Free on Mobile) */}
-          <div className="flex items-center gap-1 sm:gap-2 shrink-0 max-w-full">
-            {!isInstalled && (
-              <button
-                type="button"
-                onClick={promptInstall}
-                className="hidden lg:flex px-3 py-2 text-xs font-semibold text-emerald-300 hover:text-white bg-emerald-950/70 hover:bg-emerald-700 border border-emerald-700/70 rounded-xl transition-colors items-center gap-1.5 whitespace-nowrap shrink-0"
-                title="تثبيت لوحة تحكم VPN ALISHOP كتطبيق هاتف"
-              >
-                <Smartphone className="w-4 h-4 text-emerald-400" />
-                <span>تثبيت التطبيق</span>
-              </button>
-            )}
-
+          {/* Zone 3: Primary Action Toolbar (Responsive on Mobile, Symmetrical on Desktop) */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 max-w-full">
             <button
               type="button"
               onClick={() => openTrafficTracker(null)}
-              className="hidden lg:flex px-3 py-2 text-xs font-semibold text-sky-300 hover:text-white bg-sky-950/70 hover:bg-sky-600 border border-sky-700/70 rounded-xl transition-colors items-center gap-1.5 whitespace-nowrap shrink-0"
+              className="hidden lg:flex h-9 px-3.5 text-xs font-bold text-sky-300 hover:text-white bg-sky-950/70 hover:bg-sky-600 border border-sky-700/70 rounded-xl transition-colors items-center gap-1.5 whitespace-nowrap shrink-0"
               title="رادار التتبع الذكي للصرف وحظر العناوين الخارجة عن شام كاش"
             >
               <Activity className="w-4 h-4 text-sky-400 shrink-0" />
@@ -1302,28 +1306,28 @@ export default function App() {
               type="button"
               onClick={() => fetchClients(true)}
               disabled={refreshing}
-              className="xl:hidden p-1.5 rounded-lg bg-[#0E131F] hover:bg-slate-800/80 border border-slate-800 text-slate-300 hover:text-white transition-colors shrink-0"
-              title="مزامنة وتحديث البيانات من NodeMaven"
+              className="xl:hidden p-1.5 sm:p-2 rounded-lg bg-[#0E131F] hover:bg-slate-800/80 border border-slate-800 text-slate-300 hover:text-white transition-colors shrink-0"
+              title="مزامنة وتحديث البيانات"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin text-emerald-400' : ''}`} />
+              <RefreshCw className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${refreshing ? 'animate-spin text-emerald-400' : ''}`} />
             </button>
 
             <button
               type="button"
               onClick={openAutoGenModal}
-              className="px-2 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-bold text-amber-300 hover:text-white bg-amber-950/70 hover:bg-amber-600 border border-amber-700/70 rounded-lg sm:rounded-xl transition-colors flex items-center gap-1 sm:gap-1.5 whitespace-nowrap shrink-0"
-              title="توليد مشترك تلقائياً ببادئة تختارها مع نفس إعدادات البروكسي السوري"
+              className="h-8 sm:h-9 px-2.5 sm:px-3.5 text-[11px] sm:text-xs font-bold text-amber-300 hover:text-white bg-amber-950/70 hover:bg-amber-600 border border-amber-700/70 rounded-lg sm:rounded-xl transition-colors flex items-center gap-1 sm:gap-1.5 whitespace-nowrap shrink-0"
+              title="توليد مشترك وبروكسي سوري جديد تلقائياً"
             >
-              <Sparkles className="w-3 h-3 sm:w-4 sm:h-4 text-amber-400 shrink-0" />
+              <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400 shrink-0" />
               <span>توليد تلقائي</span>
             </button>
 
             <button
               type="button"
               onClick={openAddModal}
-              className="px-2 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg sm:rounded-xl transition-colors flex items-center gap-1 sm:gap-1.5 whitespace-nowrap shrink-0"
+              className="h-8 sm:h-9 px-2.5 sm:px-4 text-[11px] sm:text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg sm:rounded-xl transition-colors flex items-center gap-1 sm:gap-1.5 whitespace-nowrap shrink-0 shadow-sm shadow-emerald-950"
             >
-              <Plus className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
+              <Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
               <span>مشترك جديد</span>
             </button>
           </div>
@@ -1331,7 +1335,7 @@ export default function App() {
       </header>
 
       {/* Main Workspace */}
-      <main className="flex-1 max-w-[1380px] w-full mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-5">
+      <main className="flex-1 max-w-[1440px] w-full mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-5">
         {/* Mobile & Tablet Quick Tools Bar (Visible below lg breakpoint) */}
         <div className="space-y-2 lg:hidden">
           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
@@ -1343,16 +1347,6 @@ export default function App() {
               <Activity className="w-4 h-4 text-sky-400 shrink-0" />
               <span className="truncate">رادار التتبع الذكي للصرف وحظر العناوين</span>
             </button>
-
-            {nodeMavenAccountMb !== null && (
-              <div className="py-2 px-2.5 rounded-xl text-[11px] font-medium bg-emerald-950/60 border border-emerald-800/70 text-emerald-300 flex items-center justify-center gap-1 whitespace-nowrap">
-                <HardDrive className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span>الرصيد:</span>
-                <strong className="font-mono text-white" dir="ltr">
-                  {formatDataMb(nodeMavenAccountMb)}
-                </strong>
-              </div>
-            )}
           </div>
 
           <div className={`grid ${!isInstalled ? 'grid-cols-3' : 'grid-cols-2'} gap-1.5 sm:gap-2`}>
@@ -1385,11 +1379,41 @@ export default function App() {
           </div>
         </div>
 
-        {/* 4 Clean KPI Cards */}
-        <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-          <div className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-4 sm:p-5">
+        {/* 5 Symmetrical Enterprise KPI Cards (Includes Prominent General Remaining Traffic Balance on Mobile & Desktop) */}
+        <section className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
+          {/* Card 1: General Remaining Traffic Balance (Full width on mobile col-span-2, 1st card on desktop) */}
+          <div className="col-span-2 lg:col-span-1 bg-gradient-to-br from-emerald-950/60 via-[#0E131F] to-[#0E131F] border border-emerald-700/60 rounded-2xl p-4 sm:p-5 flex flex-col justify-between">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-emerald-300 font-bold flex items-center gap-1.5">
+                <HardDrive className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>الرصيد العام المتبقي</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => syncNodeMavenUsage()}
+                title="تحديث الرصيد العام المتبقي"
+                className="p-1 rounded-lg bg-emerald-950/80 hover:bg-emerald-800/80 border border-emerald-800/70 text-emerald-300 transition-colors"
+              >
+                <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+            <div className="mt-2.5 flex items-baseline justify-between gap-2">
+              <span
+                className="text-2xl sm:text-3xl font-extrabold font-mono tabular-nums text-white tracking-tight"
+                dir="ltr"
+              >
+                {nodeMavenAccountMb !== null ? formatDataMb(nodeMavenAccountMb) : '...'}
+              </span>
+              <span className="text-[11px] text-emerald-400 font-medium">
+                {nodeMavenAccountMb !== null ? 'متاح في الخادم' : 'جاري المزامنة'}
+              </span>
+            </div>
+          </div>
+
+          {/* Card 2: Total Subscribers */}
+          <div className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-4 sm:p-5 flex flex-col justify-between">
             <div className="text-xs text-slate-400 font-medium">إجمالي المشتركين</div>
-            <div className="mt-2 flex items-baseline justify-between">
+            <div className="mt-2.5 flex items-baseline justify-between">
               <span className="text-2xl sm:text-3xl font-bold font-mono tabular-nums text-white">
                 {stats.total}
               </span>
@@ -1399,19 +1423,21 @@ export default function App() {
             </div>
           </div>
 
-          <div className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-4 sm:p-5">
+          {/* Card 3: Active Subscriptions */}
+          <div className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-4 sm:p-5 flex flex-col justify-between">
             <div className="text-xs text-slate-400 font-medium">الاشتراكات النشطة</div>
-            <div className="mt-2 flex items-baseline justify-between">
+            <div className="mt-2.5 flex items-baseline justify-between">
               <span className="text-2xl sm:text-3xl font-bold font-mono tabular-nums text-emerald-400">
                 {stats.active}
               </span>
-              <span className="text-xs text-emerald-500/80">فعال</span>
+              <span className="text-xs text-emerald-500/80">فعال الآن</span>
             </div>
           </div>
 
-          <div className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-4 sm:p-5">
+          {/* Card 4: Expiring Soon */}
+          <div className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-4 sm:p-5 flex flex-col justify-between">
             <div className="text-xs text-slate-400 font-medium">تنتهي خلال 5 أيام</div>
-            <div className="mt-2 flex items-baseline justify-between">
+            <div className="mt-2.5 flex items-baseline justify-between">
               <span className="text-2xl sm:text-3xl font-bold font-mono tabular-nums text-amber-400">
                 {stats.expiringSoon}
               </span>
@@ -1419,9 +1445,10 @@ export default function App() {
             </div>
           </div>
 
-          <div className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-4 sm:p-5">
+          {/* Card 5: Expired / Paused */}
+          <div className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-4 sm:p-5 flex flex-col justify-between">
             <div className="text-xs text-slate-400 font-medium">منتهية / موقوفة</div>
-            <div className="mt-2 flex items-baseline justify-between">
+            <div className="mt-2.5 flex items-baseline justify-between">
               <span className="text-2xl sm:text-3xl font-bold font-mono tabular-nums text-rose-400">
                 {stats.expired + stats.inactive}
               </span>
@@ -1438,7 +1465,7 @@ export default function App() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="بحث باسم المشترك أو عنوان البروكسي..."
+              placeholder="بحث باسم المشترك، المعرف الفرعي، أو عنوان البروكسي..."
               className="w-full bg-[#070A10] border border-slate-800/90 focus:border-emerald-500 rounded-xl pr-10 pl-4 py-2 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none transition-colors"
             />
           </div>
@@ -1512,18 +1539,18 @@ export default function App() {
           </div>
         ) : (
           <>
-            {/* DESKTOP TABLE: Professional SaaS Layout with NodeMaven Quota Bar Under Each User */}
+            {/* DESKTOP TABLE: Symmetrical 6-Column Corporate SaaS Grid */}
             <div className="hidden md:block bg-[#0E131F] border border-slate-800/80 rounded-2xl overflow-hidden shadow-xl">
               <div className="overflow-x-auto">
                 <table className="w-full text-right border-collapse">
                   <thead>
-                    <tr className="border-b border-slate-800/90 bg-[#070A10]/80 text-xs font-semibold text-slate-400">
-                      <th className="py-3.5 px-5 whitespace-nowrap">المشترك ومخصصات NodeMaven</th>
-                      <th className="py-3.5 px-4 whitespace-nowrap">الحالة</th>
-                      <th className="py-3.5 px-4 whitespace-nowrap">تاريخ الانتهاء</th>
-                      <th className="py-3.5 px-4 whitespace-nowrap">البروكسي والخادم</th>
-                      <th className="py-3.5 px-4 whitespace-nowrap">حماية الجهاز</th>
-                      <th className="py-3.5 px-5 text-left whitespace-nowrap">التفعيل والإدارة</th>
+                    <tr className="border-b border-slate-800/90 bg-[#070A10]/90 text-xs font-bold text-slate-400">
+                      <th className="py-3.5 px-4 whitespace-nowrap">المشترك والحالة</th>
+                      <th className="py-3.5 px-4 whitespace-nowrap">حصة البيانات والتحكم بالصرف</th>
+                      <th className="py-3.5 px-4 whitespace-nowrap">الصلاحية والتمديد</th>
+                      <th className="py-3.5 px-4 whitespace-nowrap">بوابة الاتصال والجلسة</th>
+                      <th className="py-3.5 px-4 whitespace-nowrap">بصمة الجهاز</th>
+                      <th className="py-3.5 px-4 text-left whitespace-nowrap">أدوات التفعيل والإدارة</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/70 text-sm">
@@ -1552,193 +1579,190 @@ export default function App() {
 
                       return (
                         <React.Fragment key={client.id}>
-                          <tr className="hover:bg-slate-800/25 transition-colors">
-                            {/* 1. Subscriber + Underneath NodeMaven Sub-User Quota & Usage Progress */}
-                            <td className="py-4 px-5 align-top min-w-[265px]">
-                              <div className="space-y-2.5">
+                          <tr className="hover:bg-slate-800/20 transition-colors">
+                            {/* Column 1: Subscriber Identity & Active Status */}
+                            <td className="py-3.5 px-4 align-middle whitespace-nowrap">
+                              <div className="bg-[#070A10] border border-slate-800/90 rounded-xl p-3 min-w-[175px] space-y-2">
                                 <div className="flex items-center justify-between gap-2">
                                   <span
-                                    className="font-mono font-bold text-base text-white tracking-tight"
+                                    className="font-mono font-extrabold text-sm text-white tracking-tight"
                                     dir="ltr"
                                   >
                                     {client.username}
                                   </span>
-                                  {proxyDetails.subUser && (
-                                    <span
-                                      className="px-2 py-0.5 rounded-md bg-[#070A10] border border-slate-800 text-[10px] font-mono text-sky-400"
-                                      dir="ltr"
-                                    >
-                                      NodeMaven · {proxyDetails.subUser}
+                                  {statusInfo.status === 'active' && !isQuotaExhausted && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-950/60 border border-emerald-800/60 text-[11px] font-semibold text-emerald-400">
+                                      <CheckCircle2 className="w-3 h-3 shrink-0" />
+                                      <span>نشط</span>
+                                    </span>
+                                  )}
+                                  {statusInfo.status === 'active' && isQuotaExhausted && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-950/60 border border-rose-800/60 text-[11px] font-semibold text-rose-400">
+                                      <PauseCircle className="w-3 h-3 shrink-0" />
+                                      <span>نفدت الباقة</span>
+                                    </span>
+                                  )}
+                                  {statusInfo.status === 'expired' && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-950/60 border border-amber-800/60 text-[11px] font-semibold text-amber-400">
+                                      <Clock className="w-3 h-3 shrink-0" />
+                                      <span>منتهي</span>
+                                    </span>
+                                  )}
+                                  {statusInfo.status === 'inactive' && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-950/60 border border-rose-800/60 text-[11px] font-semibold text-rose-400">
+                                      <PauseCircle className="w-3 h-3 shrink-0" />
+                                      <span>موقوف</span>
                                     </span>
                                   )}
                                 </div>
 
-                                {/* NodeMaven Live Quota & Consumption Card Under Subscriber */}
-                                <div className="bg-[#070A10]/90 border border-slate-800/90 rounded-xl p-2.5 space-y-2">
-                                  {quotaMb > 0 ? (
-                                    <>
-                                      <div className="flex items-center justify-between text-[11px]">
-                                        <span className="text-slate-400 flex items-center gap-1">
-                                          <HardDrive className="w-3 h-3 text-emerald-400" />
-                                          <span>المصروف / المخصص:</span>
-                                        </span>
-                                        <span
-                                          className="font-mono tabular-nums font-semibold text-slate-200"
-                                          dir="ltr"
-                                        >
-                                          {formatDataMb(usedMb)} / {formatDataMb(quotaMb)}
-                                        </span>
-                                      </div>
-
-                                      <div className="w-full h-1.5 bg-slate-800/90 rounded-full overflow-hidden">
-                                        <div
-                                          className={`h-full rounded-full transition-all duration-300 ${
-                                            usagePct >= 90
-                                              ? 'bg-rose-500'
-                                              : usagePct >= 75
-                                              ? 'bg-amber-400'
-                                              : 'bg-emerald-500'
-                                          }`}
-                                          style={{ width: `${usagePct}%` }}
-                                        />
-                                      </div>
-
-                                      <div className="flex items-center justify-between text-[10px] text-slate-400">
-                                        <span>
-                                          {isQuotaExhausted ? (
-                                            <span className="text-rose-400 font-semibold">
-                                              انتهت الباقة المخصصة في NodeMaven
-                                            </span>
-                                          ) : (
-                                            <>
-                                              متبقي:{' '}
-                                              <strong
-                                                className="text-emerald-400 font-mono"
-                                                dir="ltr"
-                                              >
-                                                {formatDataMb(remainingMb)}
-                                              </strong>
-                                            </>
-                                          )}
-                                        </span>
-                                        <span className="font-mono tabular-nums">{usagePct}%</span>
-                                      </div>
-                                    </>
-                                  ) : (
-                                    <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400 py-0.5">
-                                      <span className="flex items-center gap-1.5">
-                                        <HardDrive className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                                        <span>
-                                          {!nodeMavenConnected
-                                            ? `جاري جلب مخصصات (${proxyDetails.subUser || client.username})...`
-                                            : proxyDetails.subUser &&
-                                              nodeMavenMap[proxyDetails.subUser.toLowerCase()]
-                                            ? 'مفتوح في NodeMaven (من الرصيد العام)'
-                                            : `اليوزر (${proxyDetails.subUser || client.username}) غير موجود في NodeMaven`}
-                                        </span>
-                                      </span>
-                                      <span className="text-[10px] font-mono text-amber-400">
-                                        {!nodeMavenConnected
-                                          ? '...'
-                                          : proxyDetails.subUser &&
-                                            nodeMavenMap[proxyDetails.subUser.toLowerCase()]
-                                          ? '∞'
-                                          : 'محذوف'}
-                                      </span>
-                                    </div>
-                                  )}
-
-                                  {/* Direct NodeMaven Refill Traffic Quota + Smart Domain Tracker Buttons */}
-                                  <div className="flex items-center justify-between gap-1.5 pt-1.5 border-t border-slate-800/80">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleRefillTraffic(client)}
-                                      disabled={refillingId === client.id}
-                                      title="إعادة ملء وتصفير حصة الترافيك لهذا المشترك في اللوحة الأم NodeMaven فوراً"
-                                      className={`flex-1 py-1 px-2 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 border transition-colors ${
-                                        justRefilledId === client.id
-                                          ? 'bg-emerald-600 border-emerald-400 text-white'
-                                          : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/60'
-                                      }`}
-                                    >
-                                      <RotateCcw
-                                        className={`w-3 h-3 ${
-                                          refillingId === client.id ? 'animate-spin' : ''
-                                        }`}
-                                      />
-                                      <span>
-                                        {refillingId === client.id
-                                          ? 'يعيد الملء...'
-                                          : justRefilledId === client.id
-                                          ? 'تم ملء الحصة ✓'
-                                          : 'إعادة ملء الحصة'}
-                                      </span>
-                                    </button>
-
-                                    <button
-                                      type="button"
-                                      onClick={() => openTrafficTracker(client)}
-                                      title="تتبع ذكي للمواقع التي تستهلك باقة هذا المشترك مع إمكانية حظر أي عنوان"
-                                      className="flex-1 py-1 px-2 rounded-lg text-[10px] font-bold bg-sky-950/70 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-800/60 flex items-center justify-center gap-1 transition-colors"
-                                    >
-                                      <Activity className="w-3 h-3" />
-                                      <span>تتبع الصرف</span>
-                                    </button>
-                                  </div>
+                                <div className="flex items-center justify-between gap-1.5 pt-1.5 border-t border-slate-800/70 text-[11px]">
+                                  <span className="text-slate-500">المعرف الفرعي:</span>
+                                  <span
+                                    className="font-mono font-semibold text-sky-400 truncate max-w-[115px]"
+                                    dir="ltr"
+                                    title={proxyDetails.subUser || client.username}
+                                  >
+                                    {proxyDetails.subUser || client.username}
+                                  </span>
                                 </div>
                               </div>
                             </td>
 
-                            {/* 2. Status */}
-                            <td className="py-4 px-4 align-middle whitespace-nowrap">
-                              {statusInfo.status === 'active' && !isQuotaExhausted && (
-                                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/50 border border-emerald-800/50 text-xs font-semibold text-emerald-400">
-                                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                                  <span>نشط</span>
+                            {/* Column 2: Data Quota & Traffic Control Card */}
+                            <td className="py-3.5 px-4 align-middle whitespace-nowrap">
+                              <div className="bg-[#070A10] border border-slate-800/90 rounded-xl p-3 w-[255px] space-y-2">
+                                {quotaMb > 0 ? (
+                                  <>
+                                    <div className="flex items-center justify-between text-[11px]">
+                                      <span className="text-slate-400 flex items-center gap-1">
+                                        <HardDrive className="w-3 h-3 text-emerald-400" />
+                                        <span>المستهلك:</span>
+                                      </span>
+                                      <span
+                                        className="font-mono tabular-nums font-bold text-slate-100"
+                                        dir="ltr"
+                                      >
+                                        {formatDataMb(usedMb)} / {formatDataMb(quotaMb)}
+                                      </span>
+                                    </div>
+
+                                    <div className="w-full h-1.5 bg-slate-800/90 rounded-full overflow-hidden">
+                                      <div
+                                        className={`h-full rounded-full transition-all duration-300 ${
+                                          usagePct >= 90
+                                            ? 'bg-rose-500'
+                                            : usagePct >= 75
+                                            ? 'bg-amber-400'
+                                            : 'bg-emerald-500'
+                                        }`}
+                                        style={{ width: `${usagePct}%` }}
+                                      />
+                                    </div>
+
+                                    <div className="flex items-center justify-between text-[10px] text-slate-400">
+                                      <span>
+                                        {isQuotaExhausted ? (
+                                          <span className="text-rose-400 font-semibold">
+                                            انتهت الحصة المخصصة
+                                          </span>
+                                        ) : (
+                                          <>
+                                            المتبقي:{' '}
+                                            <strong
+                                              className="text-emerald-400 font-mono"
+                                              dir="ltr"
+                                            >
+                                              {formatDataMb(remainingMb)}
+                                            </strong>
+                                          </>
+                                        )}
+                                      </span>
+                                      <span className="font-mono tabular-nums">{usagePct}%</span>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400 py-1">
+                                    <span className="flex items-center gap-1.5">
+                                      <HardDrive className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                      <span>
+                                        {!nodeMavenConnected
+                                          ? 'جاري مزامنة الحصة...'
+                                          : proxyDetails.subUser &&
+                                            nodeMavenMap[proxyDetails.subUser.toLowerCase()]
+                                          ? 'مفتوح (من الرصيد العام)'
+                                          : 'المعرف غير مسجل في الخادم'}
+                                      </span>
+                                    </span>
+                                    <span className="text-[10px] font-mono text-amber-400">
+                                      {!nodeMavenConnected
+                                        ? '...'
+                                        : proxyDetails.subUser &&
+                                          nodeMavenMap[proxyDetails.subUser.toLowerCase()]
+                                        ? '∞'
+                                        : 'غير متوفر'}
+                                    </span>
+                                  </div>
+                                )}
+
+                                {/* Equal-Width Symmetrical Traffic Action Buttons */}
+                                <div className="grid grid-cols-2 gap-1.5 pt-1.5 border-t border-slate-800/80">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRefillTraffic(client)}
+                                    disabled={refillingId === client.id}
+                                    title="إعادة ملء وتصفير حصة البيانات لهذا المشترك فوراً"
+                                    className={`h-7 px-2 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 border transition-colors ${
+                                      justRefilledId === client.id
+                                        ? 'bg-emerald-600 border-emerald-400 text-white'
+                                        : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/60'
+                                    }`}
+                                  >
+                                    <RotateCcw
+                                      className={`w-3 h-3 shrink-0 ${
+                                        refillingId === client.id ? 'animate-spin' : ''
+                                      }`}
+                                    />
+                                    <span className="truncate">
+                                      {refillingId === client.id
+                                        ? 'يعيد الملء...'
+                                        : justRefilledId === client.id
+                                        ? 'تم الملء ✓'
+                                        : 'إعادة ملء'}
+                                    </span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => openTrafficTracker(client)}
+                                    title="تتبع ذكي للمواقع التي تستهلك باقة هذا المشترك مع إمكانية حظر أي عنوان"
+                                    className="h-7 px-2 rounded-lg text-[10px] font-bold bg-sky-950/70 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-800/60 flex items-center justify-center gap-1 transition-colors"
+                                  >
+                                    <Activity className="w-3 h-3 shrink-0" />
+                                    <span className="truncate">تتبع الصرف</span>
+                                  </button>
                                 </div>
-                              )}
-                              {statusInfo.status === 'active' && isQuotaExhausted && (
-                                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-950/50 border border-rose-800/50 text-xs font-semibold text-rose-400">
-                                  <PauseCircle className="w-3.5 h-3.5 shrink-0" />
-                                  <span>انتهت الباقة</span>
-                                </div>
-                              )}
-                              {statusInfo.status === 'expired' && (
-                                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-950/50 border border-amber-800/50 text-xs font-semibold text-amber-400">
-                                  <Clock className="w-3.5 h-3.5 shrink-0" />
-                                  <span>منتهي</span>
-                                </div>
-                              )}
-                              {statusInfo.status === 'inactive' && (
-                                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-950/50 border border-rose-800/50 text-xs font-semibold text-rose-400">
-                                  <PauseCircle className="w-3.5 h-3.5 shrink-0" />
-                                  <span>موقوف في Happ</span>
-                                </div>
-                              )}
+                              </div>
                             </td>
 
-                            {/* 3. Professional Expiry Date Card Cell */}
-                            <td className="py-4 px-4 align-middle whitespace-nowrap">
-                              <div className="inline-flex items-center gap-2.5 bg-[#070A10] border border-slate-800/90 rounded-xl px-3 py-2">
-                                <div
-                                  className={`p-1.5 rounded-lg border ${
-                                    statusInfo.status === 'expired'
-                                      ? 'bg-amber-950/40 border-amber-800/50 text-amber-400'
-                                      : statusInfo.isExpiringSoon
-                                      ? 'bg-amber-950/40 border-amber-800/50 text-amber-400'
-                                      : 'bg-emerald-950/30 border-emerald-800/40 text-emerald-400'
-                                  }`}
-                                >
-                                  <Calendar className="w-3.5 h-3.5" />
-                                </div>
-                                <div className="space-y-0.5">
-                                  <div
-                                    className="font-mono text-xs font-bold tabular-nums text-slate-100"
+                            {/* Column 3: Expiry Date & Quick Extend Card */}
+                            <td className="py-3.5 px-4 align-middle whitespace-nowrap">
+                              <div className="bg-[#070A10] border border-slate-800/90 rounded-xl p-3 min-w-[175px] space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                                    <Calendar className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                    <span>الانتهاء:</span>
+                                  </span>
+                                  <span
+                                    className="font-mono text-xs font-bold tabular-nums text-white"
                                     dir="ltr"
                                   >
                                     {client.expiry_date}
-                                  </div>
-                                  <div
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80">
+                                  <span
                                     className={`text-[11px] font-medium ${
                                       statusInfo.status === 'expired' || statusInfo.isExpiringSoon
                                         ? 'text-amber-400'
@@ -1746,24 +1770,24 @@ export default function App() {
                                     }`}
                                   >
                                     {statusInfo.daysText}
-                                  </div>
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleQuickExtend30Days(client)}
+                                    title="تمديد الصلاحية 30 يوماً"
+                                    className="h-7 px-2.5 text-[10px] font-bold bg-emerald-950/60 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-800/60 rounded-lg transition-colors flex items-center gap-1"
+                                  >
+                                    <CalendarPlus className="w-3 h-3" />
+                                    <span>+30 يوم</span>
+                                  </button>
                                 </div>
-                                <button
-                                  type="button"
-                                  onClick={() => handleQuickExtend30Days(client)}
-                                  title="تمديد الصلاحية 30 يوماً"
-                                  className="mr-1 px-2 py-1 text-[11px] font-semibold bg-emerald-950/60 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-800/60 rounded-lg transition-colors flex items-center gap-1"
-                                >
-                                  <CalendarPlus className="w-3 h-3" />
-                                  <span>+30ي</span>
-                                </button>
                               </div>
                             </td>
 
-                            {/* 4. Professional Proxy Server Card Cell + Instant Regenerate Proxy Button */}
-                            <td className="py-4 px-4 align-middle whitespace-nowrap">
+                            {/* Column 4: Proxy Gateway & Session Card */}
+                            <td className="py-3.5 px-4 align-middle whitespace-nowrap">
                               <div
-                                className={`inline-flex flex-col gap-2 bg-[#070A10] border rounded-xl px-3 py-2.5 min-w-[330px] max-w-[420px] transition-colors ${
+                                className={`bg-[#070A10] border rounded-xl p-3 w-[325px] space-y-2 transition-colors ${
                                   justRegeneratedId === client.id
                                     ? 'border-emerald-500/90 shadow-md shadow-emerald-950/50'
                                     : 'border-slate-800/90'
@@ -1779,25 +1803,14 @@ export default function App() {
                                       {proxyDetails.cleanHost}:{client.proxy_port}
                                     </span>
                                   </div>
-                                  <div className="flex items-center gap-1.5">
-                                    {proxyDetails.subUser && (
-                                      <span
-                                        className="px-1.5 py-0.5 rounded-md bg-sky-950/60 border border-sky-800/60 text-[10px] font-mono text-sky-300"
-                                        dir="ltr"
-                                      >
-                                        👤 {proxyDetails.subUser}
-                                      </span>
-                                    )}
-                                    <span className="px-1.5 py-0.5 rounded-md bg-emerald-950/70 border border-emerald-800/60 text-[10px] font-mono font-bold text-emerald-300">
-                                      {proxyDetails.countryCode || 'SY'} 🇸🇾
-                                    </span>
-                                  </div>
+                                  <span className="px-1.5 py-0.5 rounded-md bg-emerald-950/70 border border-emerald-800/60 text-[10px] font-mono font-bold text-emerald-300">
+                                    {proxyDetails.countryCode || 'SY'} 🇸🇾
+                                  </span>
                                 </div>
 
-                                {/* Full Proxy Username Display + Instant Regenerate Button Right in Front */}
-                                <div className="flex items-center justify-between gap-1.5 pt-1.5 border-t border-slate-800/80">
+                                <div className="flex items-center gap-1.5 pt-1.5 border-t border-slate-800/80">
                                   <div
-                                    className="flex-1 min-w-0 bg-[#0B0F19] border border-slate-800/90 rounded-lg px-2.5 py-1.5 font-mono text-[11px] overflow-x-auto scrollbar-none whitespace-nowrap"
+                                    className="flex-1 min-w-0 bg-[#0B0F19] border border-slate-800/90 rounded-lg px-2 py-1 font-mono text-[11px] overflow-x-auto scrollbar-none whitespace-nowrap"
                                     dir="ltr"
                                     title={proxyDetails.fullProxyUsername}
                                   >
@@ -1811,8 +1824,8 @@ export default function App() {
                                     type="button"
                                     onClick={() => handleCheckProxyIp(client)}
                                     disabled={checkingIpId === client.id || regeneratingId === client.id}
-                                    title="فحص الـ IP الفعلي الحالي لهذا البروكسي من بوابة NodeMaven"
-                                    className="px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-[#0B0F19] hover:bg-slate-800 text-sky-300 border border-slate-800 shrink-0 transition-colors"
+                                    title="فحص عنوان الـ IP الفعلي الحالي لهذه الجلسة"
+                                    className="h-7 px-2 rounded-lg text-[10px] font-bold bg-[#0B0F19] hover:bg-slate-800 text-sky-300 border border-slate-800 shrink-0 transition-colors"
                                   >
                                     {checkingIpId === client.id ? 'يفحص...' : 'فحص IP'}
                                   </button>
@@ -1821,33 +1834,32 @@ export default function App() {
                                     type="button"
                                     onClick={() => handleRegenerateProxy(client)}
                                     disabled={regeneratingId === client.id}
-                                    title="إعادة توليد البروكسي مباشرة من NodeMaven وتفعيل IP جديد مع بقاء كلمة المرور كما هي"
-                                    className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 shrink-0 border transition-all ${
+                                    title="توليد جلسة بروكسي جديدة وتفعيل IP جديد فوراً"
+                                    className={`h-7 px-2.5 rounded-lg text-[10px] font-bold flex items-center gap-1 shrink-0 border transition-all ${
                                       justRegeneratedId === client.id
                                         ? 'bg-emerald-600 border-emerald-400 text-white'
                                         : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/70'
                                     }`}
                                   >
                                     <RefreshCw
-                                      className={`w-3.5 h-3.5 ${
+                                      className={`w-3 h-3 ${
                                         regeneratingId === client.id ? 'animate-spin' : ''
                                       }`}
                                     />
                                     <span>
                                       {regeneratingId === client.id
-                                        ? 'يتصل بـ NodeMaven...'
+                                        ? 'يولّد...'
                                         : justRegeneratedId === client.id
-                                        ? 'تغير البروكسي ✓'
-                                        : 'إعادة توليد'}
+                                        ? 'تغيرت ✓'
+                                        : 'توليد جلسة'}
                                     </span>
                                   </button>
                                 </div>
 
-                                {/* Live Verified Exit IP & ISP from NodeMaven Gateway */}
                                 {verifiedIpMap[client.id]?.ok && verifiedIpMap[client.id]?.exit_ip && (
-                                  <div className="flex items-center justify-between gap-2 px-2.5 py-1 rounded-lg bg-emerald-950/40 border border-emerald-800/50 text-[11px]">
+                                  <div className="flex items-center justify-between gap-2 px-2 py-1 rounded-lg bg-emerald-950/40 border border-emerald-800/50 text-[10px]">
                                     <span className="text-emerald-300 font-medium">
-                                      الـ IP الفعلي في NodeMaven:
+                                      عنوان الـ IP الفعلي:
                                     </span>
                                     <span className="font-mono font-bold text-white" dir="ltr">
                                       {verifiedIpMap[client.id].exit_ip} ·{' '}
@@ -1861,141 +1873,135 @@ export default function App() {
                               </div>
                             </td>
 
-                            {/* 5. Professional Device Lock Cell */}
-                            <td className="py-4 px-4 align-middle whitespace-nowrap">
+                            {/* Column 5: Device Fingerprint Protection */}
+                            <td className="py-3.5 px-4 align-middle whitespace-nowrap">
                               {boundDevice ? (
-                                <div className="inline-flex items-center gap-2.5 bg-[#070A10] border border-sky-900/60 rounded-xl px-3 py-2">
-                                  <div className="p-1.5 rounded-lg bg-sky-950/60 border border-sky-800/60 text-sky-400">
-                                    <Fingerprint className="w-3.5 h-3.5" />
+                                <div className="bg-[#070A10] border border-sky-900/60 rounded-xl p-3 min-w-[160px] space-y-2">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="text-xs font-semibold text-sky-300 flex items-center gap-1">
+                                      <Fingerprint className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                      <span>مرتبط بجهاز</span>
+                                    </span>
                                   </div>
-                                  <div className="space-y-0.5">
-                                    <div className="text-xs font-semibold text-sky-300">
-                                      مرتبط بجهاز
-                                    </div>
-                                    <div
+                                  <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80">
+                                    <span
                                       className="text-[10px] font-mono text-slate-400"
                                       dir="ltr"
                                       title={boundDevice}
                                     >
                                       {shortHwid}
-                                    </div>
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleResetDevice(client)}
+                                      title="فك قفل الجهاز للسماح بجهاز جديد"
+                                      className="h-7 px-2 rounded-lg bg-sky-950/70 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-800/60 text-[10px] font-bold flex items-center gap-1 transition-colors"
+                                    >
+                                      <RotateCcw className="w-3 h-3" />
+                                      <span>فك القفل</span>
+                                    </button>
                                   </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleResetDevice(client)}
-                                    title="فك قفل الجهاز للسماح بجهاز جديد"
-                                    className="mr-1 px-2 py-1 rounded-lg bg-sky-950/70 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-800/60 text-[11px] font-semibold flex items-center gap-1 transition-colors"
-                                  >
-                                    <RotateCcw className="w-3 h-3" />
-                                    <span>فك القفل</span>
-                                  </button>
                                 </div>
                               ) : (
-                                <div className="inline-flex items-center gap-2 bg-[#070A10] border border-slate-800/80 rounded-xl px-3 py-2 text-xs text-slate-400">
-                                  <div className="p-1.5 rounded-lg bg-slate-800/70 text-emerald-400">
-                                    <Smartphone className="w-3.5 h-3.5" />
+                                <div className="bg-[#070A10] border border-slate-800/80 rounded-xl p-3 min-w-[160px] space-y-2">
+                                  <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400">
+                                    <Smartphone className="w-3.5 h-3.5 shrink-0" />
+                                    <span>متاح للربط</span>
                                   </div>
-                                  <div>
-                                    <div className="font-semibold text-slate-300 text-xs">
-                                      متاح للربط
-                                    </div>
-                                    <div className="text-[10px] text-slate-500">
-                                      يرتبط بأول جهاز يتصل
-                                    </div>
+                                  <div className="pt-1.5 border-t border-slate-800/80 text-[10px] text-slate-500">
+                                    يرتبط تلقائياً بأول جهاز
                                   </div>
                                 </div>
                               )}
                             </td>
 
-                            {/* 6. Unified Activation & Management Toolbar */}
-                            <td className="py-4 px-5 align-middle whitespace-nowrap text-left">
-                              <div className="flex items-center justify-end gap-1.5">
-                                {/* Copy Encrypted Happ Code */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleCopyHappCode(client)}
-                                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap border ${
-                                    isHappCopied
-                                      ? 'bg-emerald-950 border-emerald-600 text-emerald-300'
-                                      : 'bg-emerald-600 hover:bg-emerald-500 border-emerald-500 text-white'
-                                  }`}
-                                >
-                                  {isHappCopied ? (
-                                    <Check className="w-3.5 h-3.5" />
-                                  ) : (
-                                    <ShieldCheck className="w-3.5 h-3.5" />
-                                  )}
-                                  <span>{isHappCopied ? 'تم النسخ' : 'كود Happ'}</span>
-                                </button>
+                            {/* Column 6: Symmetrical Activation & Management Toolbar */}
+                            <td className="py-3.5 px-4 align-middle whitespace-nowrap text-left">
+                              <div className="bg-[#070A10] border border-slate-800/90 rounded-xl p-2 inline-flex flex-col gap-1.5 min-w-[195px]">
+                                {/* Top Row: Primary Client Delivery Actions */}
+                                <div className="grid grid-cols-2 gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCopyHappCode(client)}
+                                    className={`h-8 px-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap border ${
+                                      isHappCopied
+                                        ? 'bg-emerald-950 border-emerald-600 text-emerald-300'
+                                        : 'bg-emerald-600 hover:bg-emerald-500 border-emerald-500 text-white'
+                                    }`}
+                                  >
+                                    {isHappCopied ? (
+                                      <Check className="w-3.5 h-3.5 shrink-0" />
+                                    ) : (
+                                      <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                                    )}
+                                    <span>{isHappCopied ? 'تم النسخ' : 'كود Happ'}</span>
+                                  </button>
 
-                                {/* Share Customer QR + Message (Opens Android vs iPhone share modal) */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleRequestCustomerMessage(client)}
-                                  className={`px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap border ${
-                                    isMsgCopied
-                                      ? 'bg-sky-950 border-sky-600 text-sky-300'
-                                      : 'bg-[#070A10] hover:bg-slate-800 border-slate-800 text-slate-300'
-                                  }`}
-                                  title="مشاركة الباركود QR ونص رسالة الاشتراك مباشرة إلى واتساب أو أي تطبيق"
-                                >
-                                  {isMsgCopied ? (
-                                    <Check className="w-3.5 h-3.5 text-sky-400" />
-                                  ) : (
-                                    <Share2 className="w-3.5 h-3.5 text-sky-400" />
-                                  )}
-                                  <span>مشاركة</span>
-                                </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRequestCustomerMessage(client)}
+                                    className={`h-8 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap border ${
+                                      isMsgCopied
+                                        ? 'bg-sky-950 border-sky-600 text-sky-300'
+                                        : 'bg-[#0E131F] hover:bg-slate-800 border-slate-800 text-slate-200'
+                                    }`}
+                                    title="مشاركة الباركود QR ونص رسالة الاشتراك مباشرة إلى واتساب أو أي تطبيق"
+                                  >
+                                    {isMsgCopied ? (
+                                      <Check className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                    ) : (
+                                      <Share2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                    )}
+                                    <span>مشاركة</span>
+                                  </button>
+                                </div>
 
-                                {/* QR Code Modal */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenQrModal(client)}
-                                  title="باركود التفعيل"
-                                  className="p-1.5 rounded-lg bg-[#070A10] hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition-colors"
-                                >
-                                  <QrCode className="w-4 h-4" />
-                                </button>
+                                {/* Bottom Row: 4 Equal-Width Admin Control Buttons */}
+                                <div className="grid grid-cols-4 gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenQrModal(client)}
+                                    title="عرض باركود التفعيل QR"
+                                    className="h-7 rounded-lg bg-[#0E131F] hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white flex items-center justify-center transition-colors"
+                                  >
+                                    <QrCode className="w-3.5 h-3.5" />
+                                  </button>
 
-                                <span className="w-px h-4 bg-slate-800 mx-0.5" aria-hidden="true" />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleActive(client)}
+                                    title={
+                                      client.is_active
+                                        ? 'إيقاف اشتراك المشترك فوراً داخل تطبيق Happ'
+                                        : 'إعادة تفعيل اشتراك المشترك'
+                                    }
+                                    className={`h-7 rounded-lg border flex items-center justify-center transition-colors ${
+                                      client.is_active
+                                        ? 'bg-[#0E131F] border-slate-800 text-emerald-400 hover:bg-rose-950/50 hover:text-rose-400 hover:border-rose-800/60'
+                                        : 'bg-rose-950/40 border-rose-800/60 text-rose-400 hover:text-emerald-400 hover:bg-slate-800'
+                                    }`}
+                                  >
+                                    <Power className="w-3.5 h-3.5" />
+                                  </button>
 
-                                {/* Toggle Active */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleActive(client)}
-                                  title={
-                                    client.is_active
-                                      ? 'إيقاف اشتراك المشترك فوراً داخل تطبيق Happ'
-                                      : 'إعادة تفعيل اشتراك المشترك'
-                                  }
-                                  className={`p-1.5 rounded-lg border transition-colors ${
-                                    client.is_active
-                                      ? 'bg-[#070A10] border-slate-800 text-emerald-400 hover:bg-rose-950/50 hover:text-rose-400 hover:border-rose-800/60'
-                                      : 'bg-rose-950/40 border-rose-800/60 text-rose-400 hover:text-emerald-400 hover:bg-slate-800'
-                                  }`}
-                                >
-                                  <Power className="w-4 h-4" />
-                                </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => openEditModal(client)}
+                                    title="تعديل بيانات المشترك"
+                                    className="h-7 rounded-lg bg-[#0E131F] hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white flex items-center justify-center transition-colors"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                  </button>
 
-                                {/* Edit */}
-                                <button
-                                  type="button"
-                                  onClick={() => openEditModal(client)}
-                                  title="تعديل"
-                                  className="p-1.5 rounded-lg bg-[#070A10] hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition-colors"
-                                >
-                                  <Edit3 className="w-4 h-4" />
-                                </button>
-
-                                {/* Delete */}
-                                <button
-                                  type="button"
-                                  onClick={() => setDeletingClient(client)}
-                                  title="حذف"
-                                  className="p-1.5 rounded-lg bg-[#070A10] hover:bg-rose-950/60 border border-slate-800 hover:border-rose-800/60 text-slate-400 hover:text-rose-300 transition-colors"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDeletingClient(client)}
+                                    title="حذف المشترك"
+                                    className="h-7 rounded-lg bg-[#0E131F] hover:bg-rose-950/60 border border-slate-800 hover:border-rose-800/60 text-slate-400 hover:text-rose-300 flex items-center justify-center transition-colors"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
                               </div>
                             </td>
                           </tr>
@@ -2084,14 +2090,14 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* NodeMaven Quota & Consumption Bar Underneath Mobile Subscriber Header */}
+                    {/* Data Quota & Consumption Bar Underneath Mobile Subscriber Header */}
                     <div className="bg-[#070A10] border border-slate-800/90 rounded-xl p-3 space-y-2">
                       {quotaMb > 0 ? (
                         <>
                           <div className="flex items-center justify-between text-xs">
                             <span className="text-slate-400 flex items-center gap-1.5">
                               <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
-                              <span>NodeMaven ({proxyDetails.subUser || client.username}):</span>
+                              <span>حصة المشترك ({proxyDetails.subUser || client.username}):</span>
                             </span>
                             <span className="font-mono font-bold text-slate-100" dir="ltr">
                               {formatDataMb(usedMb)} / {formatDataMb(quotaMb)}
@@ -2111,7 +2117,7 @@ export default function App() {
                           </div>
                           <div className="flex items-center justify-between text-[11px] text-slate-400 pt-0.5">
                             <span>
-                              متبقي:{' '}
+                              المتبقي:{' '}
                               <strong className="text-emerald-400 font-mono" dir="ltr">
                                 {formatDataMb(remainingMb)}
                               </strong>
@@ -2125,11 +2131,11 @@ export default function App() {
                             <HardDrive className="w-3.5 h-3.5 text-sky-400" />
                             <span>
                               {!nodeMavenConnected
-                                ? `جاري جلب (${proxyDetails.subUser || client.username})...`
+                                ? `جاري جلب حصة (${proxyDetails.subUser || client.username})...`
                                 : proxyDetails.subUser &&
                                   nodeMavenMap[proxyDetails.subUser.toLowerCase()]
-                                ? 'مفتوح في NodeMaven (بدون حد)'
-                                : `اليوزر (${proxyDetails.subUser || client.username}) غير موجود في NodeMaven`}
+                                ? 'مفتوح (من الرصيد العام)'
+                                : `المعرف (${proxyDetails.subUser || client.username}) غير مسجل في الخادم`}
                             </span>
                           </span>
                           <span className="text-[11px] font-mono text-amber-400">
@@ -2138,7 +2144,7 @@ export default function App() {
                               : proxyDetails.subUser &&
                                 nodeMavenMap[proxyDetails.subUser.toLowerCase()]
                               ? '∞'
-                              : 'محذوف'}
+                              : 'غير متوفر'}
                           </span>
                         </div>
                       )}
@@ -2191,7 +2197,7 @@ export default function App() {
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-[11px] font-medium text-slate-400 flex items-center gap-1.5">
                           <Server className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>اسم البروكسي (NodeMaven):</span>
+                          <span>معرف جلسة البروكسي:</span>
                         </span>
                         <div className="flex items-center gap-1.5">
                           <button
@@ -2219,9 +2225,9 @@ export default function App() {
                             />
                             <span>
                               {regeneratingId === client.id
-                                ? 'يتصل بـ NodeMaven...'
+                                ? 'جاري التوليد...'
                                 : justRegeneratedId === client.id
-                                ? 'تغير البروكسي ✓'
+                                ? 'تغيرت الجلسة ✓'
                                 : 'إعادة توليد'}
                             </span>
                           </button>
@@ -2238,7 +2244,7 @@ export default function App() {
                       </div>
                       {verifiedIpMap[client.id]?.ok && verifiedIpMap[client.id]?.exit_ip && (
                         <div className="flex items-center justify-between gap-2 px-2.5 py-1 rounded-lg bg-emerald-950/40 border border-emerald-800/50 text-[11px]">
-                          <span className="text-emerald-300 font-medium">IP الفعلي:</span>
+                          <span className="text-emerald-300 font-medium">الـ IP الفعلي:</span>
                           <span className="font-mono font-bold text-white" dir="ltr">
                             {verifiedIpMap[client.id].exit_ip} ·{' '}
                             <span className="text-emerald-400 font-normal">
@@ -2446,7 +2452,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Auto-Generate Subscriber Modal: Creates Brand-New Sub-User in NodeMaven Parent Dashboard + Subscriber in Local Dashboard */}
+      {/* Auto-Generate Subscriber Modal: Creates Brand-New Sub-User in Master Server + Subscriber in Local Dashboard */}
       {autoGenModalOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs overflow-y-auto"
@@ -2458,7 +2464,7 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-amber-400" />
                 <h2 className="text-sm font-bold text-white">
-                  توليد بروكسي سوري جديد في اللوحة الأم (NodeMaven) + مشترك في لوحتك
+                  توليد بروكسي سوري جديد في الخادم الرئيسي + إضافة مشترك
                 </h2>
               </div>
               <button
@@ -2477,12 +2483,12 @@ export default function App() {
                 </div>
               )}
 
-              {/* 1. NodeMaven Parent Dashboard Proxy Prefix */}
+              {/* 1. Master Server Proxy Prefix */}
               <div className="p-4 rounded-xl bg-[#070A10] border border-amber-800/50 space-y-3">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
                     <Server className="w-3.5 h-3.5 text-amber-400" />
-                    <span>1. بادئة اسم البروكسي الذي سيُنشأ في اللوحة الأم (NodeMaven)</span>
+                    <span>1. بادئة معرف البروكسي الذي سيُنشأ في الخادم الرئيسي</span>
                   </label>
                   <span className="text-[10px] font-mono text-slate-400" dir="ltr">
                     ≥ 9 chars
@@ -2517,7 +2523,7 @@ export default function App() {
                 </div>
 
                 <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-xs">
-                  <span className="text-slate-400">اليوزر الجديد الذي سيُنشأ في اللوحة الأم:</span>
+                  <span className="text-slate-400">المعرف الفرعي الجديد في الخادم الرئيسي:</span>
                   <span
                     className="font-mono text-sm font-extrabold text-amber-400 bg-amber-950/40 border border-amber-700/50 px-2.5 py-0.5 rounded-lg"
                     dir="ltr"
@@ -2592,11 +2598,11 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 3. NodeMaven Quota MB & Subscription Duration */}
+              {/* 3. Quota MB & Subscription Duration */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                    الباقة في اللوحة الأم NodeMaven (MB)
+                    حصة البيانات المخصصة للمشترك (MB)
                   </label>
                   <div className="flex items-center gap-1.5">
                     <input
@@ -2670,8 +2676,8 @@ export default function App() {
                   <Sparkles className="w-3.5 h-3.5" />
                   <span>
                     {autoGenerating
-                      ? 'جاري الإنشاء في NodeMaven واللوحة...'
-                      : 'إنشاء البروكسي في اللوحة الأم + إضافة المشترك'}
+                      ? 'جاري الإنشاء والمزامنة...'
+                      : 'إنشاء البروكسي في الخادم الرئيسي + إضافة المشترك'}
                   </span>
                 </button>
               </div>

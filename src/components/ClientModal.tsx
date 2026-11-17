@@ -280,7 +280,7 @@ export const ClientModal: React.FC<ClientModalProps> = ({
             <div>
               <div className="flex items-center justify-between gap-2 mb-1.5">
                 <label className="block text-xs font-medium text-slate-400">
-                  اسم البروكسي الكامل (NodeMaven Proxy Username)
+                  معرف جلسة البروكسي الكامل (Proxy Session Username)
                 </label>
                 <button
                   type="button"

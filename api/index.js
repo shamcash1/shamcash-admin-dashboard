@@ -1325,7 +1325,7 @@ async function handleNodeMavenRefillTraffic(req, res) {
     if (!nmSubUser || !nmSubUser.id) {
       return res.status(404).json({
         success: false,
-        error: `المستخدم الفرعي (${subPrefix}) غير موجود في اللوحة الأم NodeMaven`,
+        error: `المعرف الفرعي (${subPrefix}) غير مسجل في الخادم الرئيسي`,
       });
     }
 
@@ -1337,7 +1337,7 @@ async function handleNodeMavenRefillTraffic(req, res) {
           : 50;
     const limitBytes = Math.round(targetQuotaMb * 1000000);
 
-    // Call NodeMaven PUT /api/v2/base/sub-users/ with used_traffic: 0 to refill/reset traffic quota in master dashboard
+    // Call PUT /api/v2/base/sub-users/ with used_traffic: 0 to refill/reset traffic quota in master server
     const putRes = await fetch('https://api.nodemaven.com/api/v2/base/sub-users/', {
       method: 'PUT',
       headers: {
@@ -1360,7 +1360,7 @@ async function handleNodeMavenRefillTraffic(req, res) {
       console.error('[NODEMAVEN-REFILL] Error refilling sub-user:', putRes.status, putData);
       return res.status(400).json({
         success: false,
-        error: putData?.description || 'تعذر إعادة ملء الحصة في اللوحة الأم NodeMaven',
+        error: putData?.description || 'تعذر إعادة ملء الحصة في الخادم الرئيسي',
       });
     }
 
@@ -1732,7 +1732,7 @@ async function handleNodeMavenCreateSubUser(req, res) {
       console.error('[NODEMAVEN-CREATE] Error creating sub-user:', nmRes.status, nmData);
       return res.status(400).json({
         success: false,
-        error: nmData?.description || 'تعذر إنشاء البروكسي في اللوحة الأم NodeMaven',
+        error: nmData?.description || 'تعذر إنشاء البروكسي في الخادم الرئيسي',
         details: nmData?.errors || {},
       });
     }
