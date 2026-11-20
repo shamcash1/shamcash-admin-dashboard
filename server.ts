@@ -20,6 +20,7 @@ async function startServer() {
         req.url.startsWith('/pac/') ||
         req.url.startsWith('/api/') ||
         req.url.startsWith('/nodemaven/') ||
+        req.url.startsWith('/external-v2ray/') ||
         req.url.startsWith('/customer/') ||
         req.url.startsWith('/store/'))
     ) {

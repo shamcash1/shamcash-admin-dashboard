@@ -19,7 +19,7 @@ app.use(express.json());
 // Enable CORS for web clients, Admin Dashboard, and subscription apps (Happ, v2rayNG, V2Box, etc.)
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.header(
     'Access-Control-Allow-Headers',
     'Origin, X-Requested-With, Content-Type, Accept, X-HWID, x-hwid, hwid, X-Device-OS, User-Agent'
@@ -164,11 +164,16 @@ async function verifyAndBindClient(username, callerIp, callerHwid = '') {
   return { allowed: false, reason: 'ip_mismatch', client: data };
 }
 
-// Helper to unpack user:pass@host#limit=500&used=12.5 from proxy_host
+// Helper to unpack user:pass@host#limit=500&used=12.5&mode=... from proxy_host
 function parseStoredProxyHost(rawProxyHost, fallbackUser = '', fallbackPass = '') {
   let raw = String(rawProxyHost || '').trim();
   let quotaMb = 500; // Default 500 MB allocation if not specified
   let usedMb = 0;
+  let mode = 'shamcash_sy';
+  let provider = 'nodemaven';
+  let country = 'SY';
+  let sourceId = '';
+  let extUrl = '';
 
   if (raw.includes('#')) {
     const hashIndex = raw.indexOf('#');
@@ -182,6 +187,24 @@ function parseStoredProxyHost(rawProxyHost, fallbackUser = '', fallbackPass = ''
     if (params.has('used')) {
       const parsedUsed = Number(params.get('used'));
       if (!Number.isNaN(parsedUsed) && parsedUsed >= 0) usedMb = parsedUsed;
+    }
+    const rawMode = String(params.get('mode') || '').trim();
+    if (rawMode === 'residential_custom' || rawMode === 'external_v2ray' || rawMode === 'shamcash_sy') {
+      mode = rawMode;
+    }
+    const rawProvider = String(params.get('provider') || '').trim().toLowerCase();
+    if (rawProvider === 'dataimpulse' || rawProvider === 'nodemaven') {
+      provider = rawProvider;
+    }
+    const rawCountry = String(params.get('country') || '').trim().toUpperCase();
+    if (rawCountry) {
+      country = rawCountry;
+    }
+    if (params.has('source_id')) {
+      sourceId = String(params.get('source_id') || '').trim();
+    }
+    if (params.has('ext_url')) {
+      extUrl = String(params.get('ext_url') || '').trim();
     }
   }
 
@@ -204,12 +227,38 @@ function parseStoredProxyHost(rawProxyHost, fallbackUser = '', fallbackPass = ''
     pUser = 'LishopsbI3';
   }
 
-  // Extract NodeMaven sub-user prefix (e.g. "Alishoop2" from "Alishoop2-country-sy-sid-...")
-  const subUserPrefix = pUser.includes('-country-')
-    ? pUser.split('-country-')[0].trim()
-    : pUser.trim();
+  if (host.toLowerCase().includes('dataimpulse')) {
+    provider = 'dataimpulse';
+  }
 
-  return { host, pUser, pPass, quotaMb, usedMb, subUserPrefix };
+  // Extract NodeMaven sub-user prefix (e.g. "Alishoop2" from "Alishoop2-country-sy-sid-...")
+  // Or DataImpulse base login (e.g. "user123" from "user123__cr.us;sessid.abc")
+  let subUserPrefix = pUser.trim();
+  if (pUser.includes('-country-')) {
+    subUserPrefix = pUser.split('-country-')[0].trim();
+    if (country === 'SY') {
+      const cMatch = pUser.match(/-country-([a-zA-Z]{2})/i);
+      if (cMatch) country = cMatch[1].toUpperCase();
+    }
+  } else if (pUser.includes('__')) {
+    subUserPrefix = pUser.split('__')[0].trim();
+    const crMatch = pUser.match(/__cr\.([a-zA-Z]{2})/i);
+    if (crMatch) country = crMatch[1].toUpperCase();
+  }
+
+  return {
+    host,
+    pUser,
+    pPass,
+    quotaMb,
+    usedMb,
+    subUserPrefix,
+    mode,
+    provider,
+    country,
+    sourceId,
+    extUrl,
+  };
 }
 
 const DEFAULT_NODEMAVEN_API_KEY =
@@ -300,6 +349,276 @@ async function fetchNodeMavenAccountBalance() {
 }
 
 const SYSTEM_ROUTING_USERNAME = '__system_routing_rules__';
+const SYSTEM_EXTERNAL_V2RAY_USERNAME = '__system_external_v2ray_sources__';
+
+// ============================================================
+// EXTERNAL V2RAY SOURCES HELPERS (SSRF-Safe Probe + Storage)
+// ============================================================
+function isPrivateOrRestrictedHost(hostname) {
+  const h = String(hostname || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (!h) return true;
+  if (
+    h === 'localhost' ||
+    h === '0.0.0.0' ||
+    h === '::1' ||
+    h.endsWith('.localhost') ||
+    h.endsWith('.local') ||
+    h.endsWith('.internal') ||
+    h === 'metadata.google.internal'
+  ) {
+    return true;
+  }
+  // IPv4 private / loopback / link-local / metadata ranges
+  const ipv4Match = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4Match) {
+    const a = Number(ipv4Match[1]);
+    const b = Number(ipv4Match[2]);
+    if (a === 127 || a === 10 || a === 0) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+  }
+  // IPv6 private / link-local
+  if (h.includes(':')) {
+    if (h.startsWith('fe80:') || h.startsWith('fc') || h.startsWith('fd') || h.startsWith('::ffff:127.')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function validateExternalSubscriptionUrl(rawUrl) {
+  const trimmed = String(rawUrl || '').trim();
+  if (!trimmed) return { ok: false, error: 'الرابط فارغ' };
+
+  // Direct V2Ray links (VLESS, Trojan, VMess, Shadowsocks, Hysteria2, TUIC)
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const directV2RayRegex = /^(vless|trojan|vmess|ss|hy2|hysteria2|tuic):\/\//i;
+  if (lines.length > 0 && lines.every((l) => directV2RayRegex.test(l))) {
+    return { ok: true, kind: 'direct_links', links: lines };
+  }
+
+  // HTTP / HTTPS subscription URL
+  let parsed;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return { ok: false, error: 'صيغة الرابط غير صالحة (يجب أن يكون رابط اشتراك https:// أو رابط vless:// / trojan://)' };
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { ok: false, error: 'يُسمح فقط بروابط http/https أو روابط vless/trojan' };
+  }
+  if (isPrivateOrRestrictedHost(parsed.hostname)) {
+    return { ok: false, error: 'هذا العنوان غير مسموح به لأسباب أمنية' };
+  }
+  return { ok: true, kind: 'http_subscription', url: parsed.toString() };
+}
+
+function parseSubscriptionUserinfoHeader(headerVal) {
+  if (!headerVal || typeof headerVal !== 'string') return null;
+  const result = {
+    upload: 0,
+    download: 0,
+    total: 0,
+    expire: 0,
+  };
+  let foundAny = false;
+  const parts = headerVal.split(/[;,\s]+/);
+  for (const part of parts) {
+    const [k, v] = part.split('=');
+    if (!k || v === undefined) continue;
+    const key = k.trim().toLowerCase();
+    const num = Number(v.trim());
+    if (Number.isNaN(num)) continue;
+    if (key === 'upload' || key === 'download' || key === 'total' || key === 'expire') {
+      result[key] = num;
+      foundAny = true;
+    }
+  }
+  if (!foundAny) return null;
+
+  const usedBytes = Math.max(0, result.upload + result.download);
+  const totalBytes = Math.max(0, result.total);
+  const usedMb = Number((usedBytes / 1048576).toFixed(2));
+  const totalMb = Number((totalBytes / 1048576).toFixed(2));
+  const remainingMb = totalMb > 0 ? Math.max(0, Number((totalMb - usedMb).toFixed(2))) : 0;
+  const usagePct = totalBytes > 0 ? Math.min(100, Math.round((usedBytes / totalBytes) * 100)) : 0;
+  const nowSec = Math.floor(Date.now() / 1000);
+  const expireSoon = result.expire > 0 && result.expire - nowSec <= 3 * 86400;
+  const nearLimit =
+    (totalBytes > 0 && (usagePct >= 80 || remainingMb <= 500)) || expireSoon;
+
+  return {
+    ...result,
+    used_bytes: usedBytes,
+    used_mb: usedMb,
+    total_mb: totalMb,
+    remaining_mb: remainingMb,
+    usage_pct: usagePct,
+    near_limit: nearLimit,
+    expire_soon: expireSoon,
+    raw_header: headerVal.trim(),
+  };
+}
+
+function detectV2RayLinksFromPayload(bodyText) {
+  const raw = String(bodyText || '').trim();
+  if (!raw) return { links: [], protocols: [] };
+
+  let decoded = raw;
+  const directCheck = /^(vless|trojan|vmess|ss|hy2|hysteria2|tuic):\/\//im;
+  if (!directCheck.test(raw) && !raw.startsWith('{') && !raw.startsWith('[')) {
+    try {
+      const candidate = Buffer.from(raw.replace(/\s+/g, ''), 'base64').toString('utf-8');
+      if (directCheck.test(candidate)) {
+        decoded = candidate;
+      }
+    } catch {
+      // keep raw
+    }
+  }
+
+  const lines = decoded
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => /^(vless|trojan|vmess|ss|hy2|hysteria2|tuic):\/\//i.test(l));
+
+  const protoSet = new Set();
+  for (const l of lines) {
+    const m = l.match(/^([a-z0-9]+):\/\//i);
+    if (m) protoSet.add(m[1].toUpperCase());
+  }
+  return { links: lines, protocols: Array.from(protoSet) };
+}
+
+async function probeExternalV2RaySource(sourceUrl, timeoutMs = 8000) {
+  const validation = validateExternalSubscriptionUrl(sourceUrl);
+  if (!validation.ok) {
+    return {
+      ok: false,
+      status: 'error',
+      error_msg: validation.error,
+      checked_at: new Date().toISOString(),
+    };
+  }
+
+  if (validation.kind === 'direct_links') {
+    const detected = detectV2RayLinksFromPayload(validation.links.join('\n'));
+    return {
+      ok: true,
+      status: 'ok',
+      kind: 'direct_links',
+      server_count: detected.links.length,
+      protocols: detected.protocols,
+      userinfo: null,
+      body_base64: Buffer.from(detected.links.join('\n'), 'utf-8').toString('base64'),
+      checked_at: new Date().toISOString(),
+    };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(validation.url, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Happ/2.0 v2rayNG/1.8.23',
+        Accept: '*/*',
+      },
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: 'error',
+        error_msg: `الخادم الخارجي أعاد الحالة HTTP ${res.status}`,
+        checked_at: new Date().toISOString(),
+      };
+    }
+
+    const bodyText = await res.text();
+    const rawUserinfoHeader = res.headers.get('subscription-userinfo') || '';
+    const parsedUserinfo = parseSubscriptionUserinfoHeader(rawUserinfoHeader);
+    const detected = detectV2RayLinksFromPayload(bodyText);
+    const rawTitle = res.headers.get('profile-title') || '';
+
+    return {
+      ok: true,
+      status: 'ok',
+      kind: 'http_subscription',
+      content_type: res.headers.get('content-type') || 'text/plain; charset=utf-8',
+      profile_title: rawTitle,
+      server_count: detected.links.length,
+      protocols: detected.protocols,
+      userinfo: parsedUserinfo,
+      raw_body: bodyText,
+      checked_at: new Date().toISOString(),
+    };
+  } catch (err) {
+    clearTimeout(timer);
+    return {
+      ok: false,
+      status: 'error',
+      error_msg:
+        err?.name === 'AbortError'
+          ? 'انتهت مهلة الاتصال برابط الاشتراك الخارجي'
+          : 'تعذر الاتصال برابط الاشتراك الخارجي',
+      checked_at: new Date().toISOString(),
+    };
+  }
+}
+
+async function getExternalV2RaySourcesStore() {
+  try {
+    const { data } = await supabase
+      .from('proxy_clients')
+      .select('id, proxy_host')
+      .eq('username', SYSTEM_EXTERNAL_V2RAY_USERNAME)
+      .maybeSingle();
+    if (data && data.proxy_host) {
+      const parsed = JSON.parse(data.proxy_host);
+      return {
+        rowId: data.id,
+        sources: Array.isArray(parsed.sources) ? parsed.sources : [],
+      };
+    }
+  } catch {
+    // fallback empty
+  }
+  return { rowId: null, sources: [] };
+}
+
+async function saveExternalV2RaySourcesStore(sourcesList) {
+  const payloadStr = JSON.stringify({ sources: sourcesList || [] });
+  const existing = await getExternalV2RaySourcesStore();
+  if (existing.rowId) {
+    await supabase
+      .from('proxy_clients')
+      .update({
+        proxy_host: payloadStr,
+        is_active: false,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', existing.rowId);
+  } else {
+    await supabase.from('proxy_clients').insert([
+      {
+        username: SYSTEM_EXTERNAL_V2RAY_USERNAME,
+        is_active: false,
+        expiry_date: '2099-12-31',
+        proxy_host: payloadStr,
+        proxy_port: 443,
+      },
+    ]);
+  }
+}
 
 const BASE_SHAMCASH_PROXY_DOMAINS = [
   'api.shamcash.sy',
@@ -600,12 +919,44 @@ async function handleSubscriptionRequest(req, res) {
           clientData.proxy_username,
           clientData.proxy_password
         )
-      : { host: '', pUser: '', pPass: '', quotaMb: 500, usedMb: 0, subUserPrefix: '' };
+      : {
+          host: '',
+          pUser: '',
+          pPass: '',
+          quotaMb: 500,
+          usedMb: 0,
+          subUserPrefix: '',
+          mode: 'shamcash_sy',
+          provider: 'nodemaven',
+          country: 'SY',
+          sourceId: '',
+          extUrl: '',
+        };
 
-    let { host, pUser, pPass, quotaMb, usedMb, subUserPrefix } = parsedProxy;
+    let {
+      host,
+      pUser,
+      pPass,
+      quotaMb,
+      usedMb,
+      subUserPrefix,
+      mode: clientMode,
+      provider: clientProvider,
+      country: clientCountry,
+      sourceId: externalSourceId,
+      extUrl: externalCustomUrl,
+    } = parsedProxy;
 
-    // Live sync with NodeMaven API
-    if (subUserPrefix) {
+    // For non-ShamCash modes (Residential Custom & External V2Ray VPN), disable ShamCash-only per-app restriction
+    // while keeping ShamCash (shamcash_sy) 100% untouched!
+    if (clientMode === 'residential_custom' || clientMode === 'external_v2ray') {
+      res.setHeader('per-app-proxy-mode', 'off');
+      res.removeHeader('per-app-proxy-list');
+      res.removeHeader('per-app-proxy-list-set');
+    }
+
+    // Live sync with NodeMaven API (for ShamCash SY and Residential Custom on NodeMaven)
+    if (clientMode !== 'external_v2ray' && clientProvider === 'nodemaven' && subUserPrefix) {
       const nmMap = await fetchNodeMavenSubUsersMap();
       const nmEntry = nmMap ? nmMap[subUserPrefix.toLowerCase()] : null;
       if (nmEntry) {
@@ -618,7 +969,7 @@ async function handleSubscriptionRequest(req, res) {
 
     const limitBytes = quotaMb > 0 ? Math.round(quotaMb * 1000000) : 100000000000;
     const usedBytes = Math.min(limitBytes, Math.max(0, Math.round(usedMb * 1000000)));
-    const isQuotaExhausted = quotaMb > 0 && usedMb >= quotaMb;
+    const isQuotaExhausted = clientMode !== 'external_v2ray' && quotaMb > 0 && usedMb >= quotaMb;
 
     // CRITICAL FIX FOR PAUSE / EXPIRY / DEVICE LOCK / QUOTA EXHAUSTED:
     // Never return HTTP 403 to Happ! When Happ receives HTTP 403, it ignores the response and keeps
@@ -705,6 +1056,198 @@ async function handleSubscriptionRequest(req, res) {
     );
 
     const tag = encodeURIComponent(`VPN Alishop - ${clientData.username}`);
+
+    // ============================================================
+    // MODE C: GENERAL VPN (EXTERNAL V2RAY / VLESS / TROJAN SOURCES)
+    // ============================================================
+    if (clientMode === 'external_v2ray') {
+      const store = await getExternalV2RaySourcesStore();
+      const matchedSource = externalSourceId
+        ? store.sources.find((s) => s.id === externalSourceId)
+        : null;
+      const targetSourceUrl = matchedSource?.source_url || externalCustomUrl || '';
+
+      if (!targetSourceUrl) {
+        const noSourceMsg = '⛔ لم يتم ربط مصدر V2Ray خارجي بهذا المشترك بعد';
+        res.setHeader('announce', `base64:${Buffer.from(noSourceMsg, 'utf-8').toString('base64')}`);
+        return res.status(200).send('');
+      }
+
+      const probed = await probeExternalV2RaySource(targetSourceUrl, 8500);
+      if (!probed.ok) {
+        const errMsg = `⛔ تعذر جلب سيرفرات المصدر الخارجي: ${probed.error_msg || 'خطأ في الاتصال'}`;
+        res.setHeader('announce', `base64:${Buffer.from(errMsg, 'utf-8').toString('base64')}`);
+        return res.status(200).send('');
+      }
+
+      // Update subscriber's Subscription-Userinfo header from upstream telemetry + dynamic subscriber expiry
+      if (probed.userinfo) {
+        const up = probed.userinfo.upload || 0;
+        const dn = probed.userinfo.download || 0;
+        const tot = probed.userinfo.total || 0;
+        const effectiveExpire =
+          probed.userinfo.expire > 0 ? Math.min(probed.userinfo.expire, expireUnix) : expireUnix;
+        res.setHeader(
+          'subscription-userinfo',
+          `upload=${up}; download=${dn}; total=${tot}; expire=${effectiveExpire}`
+        );
+
+        // Background-update cached telemetry on the external source record
+        if (matchedSource) {
+          const updatedSources = store.sources.map((s) =>
+            s.id === matchedSource.id
+              ? {
+                  ...s,
+                  server_count: probed.server_count || s.server_count || 0,
+                  protocols: probed.protocols?.length ? probed.protocols : s.protocols || [],
+                  userinfo: {
+                    ...probed.userinfo,
+                    status: 'ok',
+                    checked_at: probed.checked_at,
+                  },
+                }
+              : s
+          );
+          saveExternalV2RaySourcesStore(updatedSources).catch(() => {});
+        }
+      } else {
+        res.setHeader(
+          'subscription-userinfo',
+          `upload=0; download=0; total=0; expire=${expireUnix}`
+        );
+      }
+
+      if (probed.kind === 'direct_links') {
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        return res.status(200).send(probed.body_base64 || '');
+      }
+
+      res.setHeader('Content-Type', probed.content_type || 'text/plain; charset=utf-8');
+      return res.status(200).send(probed.raw_body || '');
+    }
+
+    // ============================================================
+    // MODE B: CUSTOM RESIDENTIAL PROXY BY COUNTRY (OPEN BROWSING)
+    // Supports NodeMaven & DataImpulse with Sticky Session & Quota Counter
+    // ============================================================
+    if (clientMode === 'residential_custom' && !forceRawSocks) {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+
+      const socksServer = {
+        address: host,
+        port: port,
+      };
+      if (pUser && pPass) {
+        socksServer.users = [
+          {
+            user: pUser,
+            pass: pPass,
+            level: 8,
+          },
+        ];
+      }
+
+      const remainingMb = Math.max(0, Number((quotaMb - usedMb).toFixed(1)));
+      const descriptionText =
+        quotaMb > 0
+          ? `${clientCountry} · متبقي ${remainingMb}MB`
+          : `Residential ${clientCountry}`;
+
+      const residentialXrayConfig = {
+        remarks: `VPN Alishop [${clientCountry}] - ${clientData.username}`,
+        meta: {
+          serverDescription: descriptionText.slice(0, 30),
+        },
+        log: {
+          loglevel: 'warning',
+        },
+        dns: {
+          hosts: {
+            'cloudflare-dns.com': '1.1.1.1',
+            'dns.google': '8.8.8.8',
+          },
+          servers: ['1.1.1.1', '8.8.8.8'],
+        },
+        inbounds: [
+          {
+            tag: 'socks',
+            port: 10808,
+            listen: '127.0.0.1',
+            protocol: 'socks',
+            settings: {
+              auth: 'noauth',
+              udp: true,
+              userLevel: 8,
+            },
+            sniffing: {
+              enabled: true,
+              destOverride: ['http', 'tls', 'quic'],
+              routeOnly: false,
+            },
+          },
+          {
+            tag: 'http',
+            port: 10809,
+            listen: '127.0.0.1',
+            protocol: 'http',
+            settings: {
+              userLevel: 8,
+            },
+            sniffing: {
+              enabled: true,
+              destOverride: ['http', 'tls', 'quic'],
+              routeOnly: false,
+            },
+          },
+        ],
+        outbounds: [
+          {
+            tag: 'proxy',
+            protocol: 'socks',
+            settings: {
+              servers: [socksServer],
+            },
+            streamSettings: {
+              network: 'tcp',
+            },
+          },
+          {
+            tag: 'direct',
+            protocol: 'freedom',
+            settings: {},
+          },
+          {
+            tag: 'block',
+            protocol: 'blackhole',
+            settings: {
+              response: { type: 'none' },
+            },
+          },
+        ],
+        routing: {
+          domainStrategy: 'AsIs',
+          rules: [
+            {
+              type: 'field',
+              port: 53,
+              outboundTag: 'direct',
+            },
+            {
+              type: 'field',
+              ip: ['127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'],
+              outboundTag: 'direct',
+            },
+            {
+              type: 'field',
+              network: 'tcp,udp',
+              outboundTag: 'proxy',
+            },
+          ],
+        },
+      };
+
+      return res.status(200).send(JSON.stringify([residentialXrayConfig], null, 2));
+    }
 
     // Build dynamic Xray domain lists combining base rules + admin's dynamic rules from Smart Traffic Tracker
     const activeBlockedDomains = Array.from(
@@ -1412,22 +1955,37 @@ function generateNodeMavenSid(excludeSid = '') {
   return sid;
 }
 
-// Helper: Build canonical NodeMaven proxy username string synced with official Sub-User name from NodeMaven API
-function buildNodeMavenProxyUsername(rawProxyUsername, officialSubUserName, newSid) {
+// Helper: Build canonical proxy username string for NodeMaven or DataImpulse with dynamic country & sticky session
+function buildNodeMavenProxyUsername(rawProxyUsername, officialSubUserName, newSid, countryCode = 'sy', provider = 'nodemaven') {
   const raw = String(rawProxyUsername || '').trim();
+  const cc = String(countryCode || 'sy').trim().toLowerCase() || 'sy';
+
+  if (provider === 'dataimpulse' || raw.includes('__cr.') || raw.includes(';sessid.')) {
+    const baseLogin = (raw.includes('__') ? raw.split('__')[0].trim() : raw) || officialSubUserName || 'user';
+    const existingCountryMatch = raw.match(/__cr\.([a-zA-Z]{2})/i);
+    const targetCc = countryCode ? cc : (existingCountryMatch ? existingCountryMatch[1].toLowerCase() : 'us');
+    const existingTtlMatch = raw.match(/;sessttl\.(\d+)/i);
+    const ttl = existingTtlMatch ? existingTtlMatch[1] : '60';
+    return `${baseLogin}__cr.${targetCc};sessid.${newSid.slice(0, 10)};sessttl.${ttl}`;
+  }
+
   const baseSubUser =
     officialSubUserName ||
     (raw.includes('-country-') ? raw.split('-country-')[0].trim() : raw) ||
     'user';
 
   if (!raw) {
-    return `${baseSubUser}-country-sy-sid-${newSid}-filter-medium-norotate-true`;
+    return `${baseSubUser}-country-${cc}-sid-${newSid}-filter-medium-norotate-true`;
   }
 
   let updated = raw;
   if (updated.includes('-country-') && officialSubUserName) {
     const restAfterSubUser = updated.slice(updated.indexOf('-country-'));
     updated = `${officialSubUserName}${restAfterSubUser}`;
+  }
+
+  if (countryCode && /-country-[a-zA-Z]{2}/i.test(updated)) {
+    updated = updated.replace(/-country-[a-zA-Z]{2}/i, `-country-${cc}`);
   }
 
   if (/-sid-[a-zA-Z0-9]+/i.test(updated)) {
@@ -1438,22 +1996,24 @@ function buildNodeMavenProxyUsername(rawProxyUsername, officialSubUserName, newS
     return `${updated}-sid-${newSid}-filter-medium-norotate-true`;
   }
 
-  return `${baseSubUser}-country-sy-sid-${newSid}-filter-medium-norotate-true`;
+  return `${baseSubUser}-country-${cc}-sid-${newSid}-filter-medium-norotate-true`;
 }
 
-// Helper: Live probe through gate.nodemaven.com:8080 to activate the session on NodeMaven & get its real Exit IP
+// Helper: Live probe through proxy HTTP gateway to activate the session & get its real Exit IP
 function probeNodeMavenProxyExitIp(proxyUsername, proxyPassword, proxyHost = 'gate.nodemaven.com', timeoutMs = 6500) {
   return new Promise((resolve) => {
     const cleanHost = String(proxyHost || 'gate.nodemaven.com')
       .replace(/#.*$/, '')
       .replace(/^.*@/, '')
       .trim() || 'gate.nodemaven.com';
+    const isDataImpulse = cleanHost.toLowerCase().includes('dataimpulse');
+    const probePort = isDataImpulse ? 823 : 8080;
     const auth = Buffer.from(`${proxyUsername}:${proxyPassword}`).toString('base64');
 
     const req = http.request(
       {
         host: cleanHost,
-        port: 8080,
+        port: probePort,
         method: 'GET',
         path: 'http://ip-api.com/json?fields=status,country,countryCode,regionName,city,isp,query',
         headers: {
@@ -1502,8 +2062,8 @@ function probeNodeMavenProxyExitIp(proxyUsername, proxyPassword, proxyHost = 'ga
   });
 }
 
-// Helper: Pack user:pass@host#limit=...&used=... for Supabase storage
-function packServerProxyHost(host, username, password, quotaMb, usedMb) {
+// Helper: Pack user:pass@host#limit=...&used=...&mode=... for Supabase storage
+function packServerProxyHost(host, username, password, quotaMb, usedMb, meta = {}) {
   const cleanHost = String(host || 'gate.nodemaven.com')
     .trim()
     .replace(/#.*$/, '')
@@ -1511,11 +2071,21 @@ function packServerProxyHost(host, username, password, quotaMb, usedMb) {
   const u = username ? String(username).trim() : '';
   const p = password ? String(password).trim() : '';
   const base = u && p ? `${u}:${p}@${cleanHost}` : cleanHost;
+  const params = new URLSearchParams();
   if (typeof quotaMb === 'number' && quotaMb > 0) {
     const usedVal = typeof usedMb === 'number' && !Number.isNaN(usedMb) ? Number(usedMb.toFixed(2)) : 0;
-    return `${base}#limit=${quotaMb}&used=${usedVal}`;
+    params.set('limit', String(quotaMb));
+    params.set('used', String(usedVal));
   }
-  return base;
+  if (meta?.mode && meta.mode !== 'shamcash_sy') {
+    params.set('mode', String(meta.mode));
+    if (meta.provider) params.set('provider', String(meta.provider));
+    if (meta.country) params.set('country', String(meta.country).toUpperCase());
+    if (meta.sourceId) params.set('source_id', String(meta.sourceId));
+    if (meta.extUrl) params.set('ext_url', String(meta.extUrl));
+  }
+  const qs = params.toString();
+  return qs ? `${base}#${qs}` : base;
 }
 
 // POST /api/nodemaven/regenerate
@@ -1534,18 +2104,39 @@ async function handleNodeMavenRegenerate(req, res) {
       quota_mb = 0,
       used_mb = 0,
       previous_ip = '',
+      service_mode = 'shamcash_sy',
+      proxy_provider = 'nodemaven',
+      country_code = '',
     } = req.body || {};
 
     const rawUser = String(proxy_username || '').trim();
-    const subPrefix = rawUser.includes('-country-')
-      ? rawUser.split('-country-')[0].trim()
-      : rawUser || String(username || '').trim();
+    const isDataImpulse =
+      proxy_provider === 'dataimpulse' ||
+      String(proxy_host || '').toLowerCase().includes('dataimpulse') ||
+      rawUser.includes('__cr.');
 
-    const oldSidMatch = rawUser.match(/-sid-([a-zA-Z0-9]+)/i);
+    const subPrefix = isDataImpulse
+      ? rawUser.includes('__')
+        ? rawUser.split('__')[0].trim()
+        : rawUser
+      : rawUser.includes('-country-')
+        ? rawUser.split('-country-')[0].trim()
+        : rawUser || String(username || '').trim();
+
+    const oldSidMatch = isDataImpulse
+      ? rawUser.match(/;sessid\.([a-zA-Z0-9]+)/i)
+      : rawUser.match(/-sid-([a-zA-Z0-9]+)/i);
     const oldSid = oldSidMatch ? oldSidMatch[1] : '';
 
-    // 1. Sync with live NodeMaven Sub-Users API so sub-user & password match the master NodeMaven dashboard
-    const nmMap = await fetchNodeMavenSubUsersMap();
+    const detectedCountryMatch = isDataImpulse
+      ? rawUser.match(/__cr\.([a-zA-Z]{2})/i)
+      : rawUser.match(/-country-([a-zA-Z]{2})/i);
+    const effectiveCountry =
+      String(country_code || '').trim().toLowerCase() ||
+      (detectedCountryMatch ? detectedCountryMatch[1].toLowerCase() : 'sy');
+
+    // 1. Sync with live NodeMaven Sub-Users API when provider is NodeMaven
+    const nmMap = !isDataImpulse ? await fetchNodeMavenSubUsersMap() : null;
     const nmSubUser = nmMap && subPrefix ? nmMap[subPrefix.toLowerCase()] : null;
 
     const officialSubUserName = nmSubUser ? nmSubUser.proxy_username : subPrefix;
@@ -1553,17 +2144,25 @@ async function handleNodeMavenRegenerate(req, res) {
       (nmSubUser && nmSubUser.proxy_password) || String(proxy_password || '').trim();
 
     let chosenSid = generateNodeMavenSid(oldSid);
-    let chosenProxyUsername = buildNodeMavenProxyUsername(rawUser, officialSubUserName, chosenSid);
+    let chosenProxyUsername = buildNodeMavenProxyUsername(
+      rawUser,
+      officialSubUserName,
+      chosenSid,
+      effectiveCountry,
+      isDataImpulse ? 'dataimpulse' : 'nodemaven'
+    );
     let probeResult = { ok: false };
 
-    // 2. Activate & verify the new proxy session live on gate.nodemaven.com (up to 3 attempts if node is slow or same IP)
+    // 2. Activate & verify the new proxy session live on gateway (up to 3 attempts if node is slow or same IP)
     if (officialPassword) {
       for (let attempt = 0; attempt < 3; attempt++) {
         const candidateSid = attempt === 0 ? chosenSid : generateNodeMavenSid(chosenSid);
         const candidateUsername = buildNodeMavenProxyUsername(
           rawUser,
           officialSubUserName,
-          candidateSid
+          candidateSid,
+          effectiveCountry,
+          isDataImpulse ? 'dataimpulse' : 'nodemaven'
         );
         const check = await probeNodeMavenProxyExitIp(
           candidateUsername,
@@ -1582,7 +2181,7 @@ async function handleNodeMavenRegenerate(req, res) {
       }
     }
 
-    // 3. Persist updated proxy string in Supabase
+    // 3. Persist updated proxy string in Supabase (preserving mode/provider/country metadata!)
     const finalQuotaMb =
       nmSubUser && nmSubUser.traffic_limit_bytes > 0 ? nmSubUser.traffic_limit_mb : Number(quota_mb || 0);
     const finalUsedMb =
@@ -1593,7 +2192,12 @@ async function handleNodeMavenRegenerate(req, res) {
       chosenProxyUsername,
       officialPassword,
       finalQuotaMb,
-      finalUsedMb
+      finalUsedMb,
+      {
+        mode: service_mode,
+        provider: isDataImpulse ? 'dataimpulse' : 'nodemaven',
+        country: effectiveCountry.toUpperCase(),
+      }
     );
 
     if (client_id) {
@@ -1699,8 +2303,10 @@ async function handleNodeMavenCreateSubUser(req, res) {
       proxy_prefix = 'Alishop',
       quota_mb = 50,
       proxy_host = 'gate.nodemaven.com',
+      country_code = 'sy',
     } = req.body || {};
 
+    const cc = String(country_code || 'sy').trim().toLowerCase() || 'sy';
     const nmMap = (await fetchNodeMavenSubUsersMap()) || {};
     const newSubUserName = buildValidNodeMavenSubUserName(proxy_prefix, nmMap);
     // NodeMaven password requirement: >= 9 chars, alphanumeric/underscore (13 hex chars ending in 4 matches NodeMaven standard)
@@ -1741,9 +2347,9 @@ async function handleNodeMavenCreateSubUser(req, res) {
     const officialSubUser = createdPayload.proxy_username || newSubUserName;
     const officialPassword = createdPayload.proxy_password || newProxyPassword;
     const newSid = generateNodeMavenSid();
-    const fullProxyUsername = `${officialSubUser}-country-sy-sid-${newSid}-filter-medium-norotate-true`;
+    const fullProxyUsername = `${officialSubUser}-country-${cc}-sid-${newSid}-filter-medium-norotate-true`;
 
-    // Probe gate.nodemaven.com to activate the Syrian session immediately
+    // Probe gateway to activate the sticky session immediately
     const liveCheck = await probeNodeMavenProxyExitIp(
       fullProxyUsername,
       officialPassword,
@@ -1758,17 +2364,211 @@ async function handleNodeMavenCreateSubUser(req, res) {
       full_proxy_username: fullProxyUsername,
       proxy_password: officialPassword,
       session_id: newSid,
+      country_code: cc.toUpperCase(),
       quota_mb: isLimited ? limitMbNum : 0,
       live_check: liveCheck,
     });
   } catch (err) {
     console.error('[NODEMAVEN-CREATE] Unexpected error:', err);
-    return res.status(500).json({ success: false, error: 'Failed to create NodeMaven sub-user' });
+    return res.status(500).json({ success: false, error: 'Failed to create sub-user' });
   }
 }
 
 app.post('/nodemaven/create-subuser', handleNodeMavenCreateSubUser);
 app.post('/api/nodemaven/create-subuser', handleNodeMavenCreateSubUser);
+
+// ============================================================
+// 1B. EXTERNAL V2RAY SOURCES MANAGEMENT & USERINFO PROBING API
+// ============================================================
+async function handleGetExternalV2RaySources(req, res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  try {
+    const shouldRefresh = req.query?.refresh === '1' || req.query?.refresh === 'true';
+    const store = await getExternalV2RaySourcesStore();
+    let sources = store.sources;
+
+    if (shouldRefresh && sources.length > 0) {
+      const refreshed = await Promise.all(
+        sources.map(async (src) => {
+          const probed = await probeExternalV2RaySource(src.source_url, 7000);
+          return {
+            ...src,
+            server_count: probed.ok ? probed.server_count || src.server_count || 0 : src.server_count || 0,
+            protocols: probed.ok && probed.protocols?.length ? probed.protocols : src.protocols || [],
+            userinfo: probed.ok
+              ? probed.userinfo
+                ? { ...probed.userinfo, status: 'ok', checked_at: probed.checked_at }
+                : { status: 'no_header', checked_at: probed.checked_at }
+              : {
+                  ...(src.userinfo || {}),
+                  status: 'error',
+                  error_msg: probed.error_msg,
+                  checked_at: probed.checked_at,
+                },
+          };
+        })
+      );
+      sources = refreshed;
+      await saveExternalV2RaySourcesStore(sources);
+    }
+
+    return res.json({ success: true, sources });
+  } catch (err) {
+    console.error('[EXT-V2RAY] GET error:', err);
+    return res.status(500).json({ success: false, error: 'تعذر جلب المصادر الخارجية' });
+  }
+}
+
+async function handleSaveExternalV2RaySource(req, res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  try {
+    const { id, name, source_url, country_code = 'AUTO', notes = '' } = req.body || {};
+    const cleanName = String(name || '').trim();
+    const cleanUrl = String(source_url || '').trim();
+    const cleanCountry = String(country_code || 'AUTO').trim().toUpperCase() || 'AUTO';
+
+    if (!cleanName) {
+      return res.status(400).json({ success: false, error: 'يرجى إدخال اسم المصدر الخارجي' });
+    }
+    const validation = validateExternalSubscriptionUrl(cleanUrl);
+    if (!validation.ok) {
+      return res.status(400).json({ success: false, error: validation.error });
+    }
+
+    const probed = await probeExternalV2RaySource(cleanUrl, 7500);
+    const store = await getExternalV2RaySourcesStore();
+    const sourceId = id && String(id).trim() ? String(id).trim() : `v2src_${crypto.randomUUID().slice(0, 8)}`;
+
+    const entry = {
+      id: sourceId,
+      name: cleanName,
+      source_url: cleanUrl,
+      kind: validation.kind,
+      country_code: cleanCountry,
+      notes: String(notes || '').trim(),
+      server_count: probed.ok ? probed.server_count || 0 : 0,
+      protocols: probed.ok && probed.protocols?.length ? probed.protocols : [],
+      userinfo: probed.ok
+        ? probed.userinfo
+          ? { ...probed.userinfo, status: 'ok', checked_at: probed.checked_at }
+          : { status: 'no_header', checked_at: probed.checked_at }
+        : {
+            status: 'error',
+            error_msg: probed.error_msg,
+            checked_at: probed.checked_at,
+          },
+      created_at:
+        store.sources.find((s) => s.id === sourceId)?.created_at || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    const existsIdx = store.sources.findIndex((s) => s.id === sourceId);
+    const nextSources =
+      existsIdx >= 0
+        ? store.sources.map((s) => (s.id === sourceId ? entry : s))
+        : [entry, ...store.sources];
+
+    await saveExternalV2RaySourcesStore(nextSources);
+    return res.json({ success: true, source: entry, sources: nextSources });
+  } catch (err) {
+    console.error('[EXT-V2RAY] POST error:', err);
+    return res.status(500).json({ success: false, error: 'تعذر حفظ المصدر الخارجي' });
+  }
+}
+
+async function handleDeleteExternalV2RaySource(req, res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  try {
+    const targetId = String(req.params?.id || '').trim();
+    if (!targetId) {
+      return res.status(400).json({ success: false, error: 'معرف المصدر غير صالح' });
+    }
+    const store = await getExternalV2RaySourcesStore();
+    const nextSources = store.sources.filter((s) => s.id !== targetId);
+    await saveExternalV2RaySourcesStore(nextSources);
+    return res.json({ success: true, sources: nextSources });
+  } catch (err) {
+    console.error('[EXT-V2RAY] DELETE error:', err);
+    return res.status(500).json({ success: false, error: 'تعذر حذف المصدر الخارجي' });
+  }
+}
+
+async function handleProbeExternalV2Ray(req, res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  try {
+    const { source_url, source_id } = req.body || {};
+    let targetUrl = String(source_url || '').trim();
+    const store = await getExternalV2RaySourcesStore();
+
+    if (!targetUrl && source_id) {
+      const found = store.sources.find((s) => s.id === source_id);
+      if (found) targetUrl = found.source_url;
+    }
+
+    const probed = await probeExternalV2RaySource(targetUrl, 8000);
+
+    if (source_id) {
+      const nextSources = store.sources.map((s) =>
+        s.id === source_id
+          ? {
+              ...s,
+              server_count: probed.ok ? probed.server_count || s.server_count || 0 : s.server_count || 0,
+              protocols: probed.ok && probed.protocols?.length ? probed.protocols : s.protocols || [],
+              userinfo: probed.ok
+                ? probed.userinfo
+                  ? { ...probed.userinfo, status: 'ok', checked_at: probed.checked_at }
+                  : { status: 'no_header', checked_at: probed.checked_at }
+                : {
+                    ...(s.userinfo || {}),
+                    status: 'error',
+                    error_msg: probed.error_msg,
+                    checked_at: probed.checked_at,
+                  },
+            }
+          : s
+      );
+      await saveExternalV2RaySourcesStore(nextSources);
+      return res.json({
+        success: probed.ok,
+        probe: {
+          status: probed.status,
+          kind: probed.kind,
+          server_count: probed.server_count || 0,
+          protocols: probed.protocols || [],
+          userinfo: probed.userinfo || null,
+          error_msg: probed.error_msg || null,
+          checked_at: probed.checked_at,
+        },
+        sources: nextSources,
+      });
+    }
+
+    return res.json({
+      success: probed.ok,
+      probe: {
+        status: probed.status,
+        kind: probed.kind,
+        server_count: probed.server_count || 0,
+        protocols: probed.protocols || [],
+        userinfo: probed.userinfo || null,
+        error_msg: probed.error_msg || null,
+        checked_at: probed.checked_at,
+      },
+    });
+  } catch (err) {
+    console.error('[EXT-V2RAY] PROBE error:', err);
+    return res.status(500).json({ success: false, error: 'تعذر فحص رابط المصدر الخارجي' });
+  }
+}
+
+app.get('/external-v2ray/sources', handleGetExternalV2RaySources);
+app.get('/api/external-v2ray/sources', handleGetExternalV2RaySources);
+app.post('/external-v2ray/sources', handleSaveExternalV2RaySource);
+app.post('/api/external-v2ray/sources', handleSaveExternalV2RaySource);
+app.delete('/external-v2ray/sources/:id', handleDeleteExternalV2RaySource);
+app.delete('/api/external-v2ray/sources/:id', handleDeleteExternalV2RaySource);
+app.post('/external-v2ray/probe', handleProbeExternalV2Ray);
+app.post('/api/external-v2ray/probe', handleProbeExternalV2Ray);
 
 // ============================================================
 // 2. HAPP ENCRYPTED LINK GENERATOR: GET /happ/:username

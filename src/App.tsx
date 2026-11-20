@@ -27,11 +27,18 @@ import {
   Fingerprint,
   Sparkles,
   Activity,
+  Globe,
+  Zap,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   supabase,
   ProxyClient,
   ClientComputedStatus,
+  ServiceMode,
+  ExternalV2RaySource,
+  isSystemConfigUsername,
+  getCountryInfo,
   getClientStatusInfo,
   addDaysToDateString,
   fetchHappEncryptedLink,
@@ -40,10 +47,13 @@ import {
   formatDataMb,
   parseProxyDetails,
   regenerateNodeMavenProxyUsername,
+  regenerateProxyUsernameForMode,
   buildCustomerActivationMessage,
   generateSubscriberWithPrefix,
   previewNextNodeMavenSubUserName,
   createNodeMavenSubUserLive,
+  fetchExternalV2RaySources,
+  probeExternalV2RaySourceApi,
   getQrCodeImageUrl,
   HAPP_IOS_URL,
   HAPP_ANDROID_APK_URL,
@@ -52,11 +62,13 @@ import { ClientModal } from './components/ClientModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { QrCodeModal, copyToClipboardSync, shareQrAndMessage } from './components/QrCodeModal';
 import { SmartTrafficTrackerModal } from './components/SmartTrafficTrackerModal';
+import { ExternalV2RaySourcesModal } from './components/ExternalV2RaySourcesModal';
 import { usePWAInstall } from './hooks/usePWAInstall';
 
 const LOCAL_DELTA_STORAGE_KEY = 'shamcash_admin_local_delta_v1';
 
 type FilterTab = 'all' | ClientComputedStatus | 'expiring_soon';
+type ModeFilterTab = 'all' | ServiceMode;
 
 interface LocalDeltaState {
   upserted: Record<string, ProxyClient>;
@@ -109,6 +121,7 @@ export default function App() {
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<FilterTab>('all');
+  const [modeFilter, setModeFilter] = useState<ModeFilterTab>('all');
   const [copiedHappId, setCopiedHappId] = useState<string | null>(null);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const [copiedAndroidApp, setCopiedAndroidApp] = useState<boolean>(false);
@@ -124,6 +137,11 @@ export default function App() {
   const [verifiedIpMap, setVerifiedIpMap] = useState<Record<string, VerifiedProxyIpInfo>>({});
   const [refillingId, setRefillingId] = useState<string | null>(null);
   const [justRefilledId, setJustRefilledId] = useState<string | null>(null);
+
+  // External V2Ray Sources state
+  const [externalSources, setExternalSources] = useState<ExternalV2RaySource[]>([]);
+  const [externalSourcesModalOpen, setExternalSourcesModalOpen] = useState<boolean>(false);
+  const [probingExternalId, setProbingExternalId] = useState<string | null>(null);
 
   // Smart Traffic Tracker Modal state
   const [trackerModalOpen, setTrackerModalOpen] = useState<boolean>(false);
@@ -198,6 +216,13 @@ export default function App() {
     }
   }, []);
 
+  const syncExternalSources = useCallback(async (refresh = false) => {
+    const res = await fetchExternalV2RaySources(refresh);
+    if (res.success) {
+      setExternalSources(res.sources);
+    }
+  }, []);
+
   const fetchClients = useCallback(
     async (isSilent = false) => {
       if (!isSilent) setLoading(true);
@@ -207,11 +232,12 @@ export default function App() {
         const [{ data, error }] = await Promise.all([
           supabase.from('proxy_clients').select('*').order('created_at', { ascending: false }),
           syncNodeMavenUsage(),
+          syncExternalSources(false),
         ]);
 
         if (!error && data) {
           const normalized = (data as ProxyClient[])
-            .filter((row) => row.username !== '__system_routing_rules__')
+            .filter((row) => !isSystemConfigUsername(row.username))
             .map(normalizeProxyClient);
           setRemoteClients(normalized);
         }
@@ -220,7 +246,7 @@ export default function App() {
         setRefreshing(false);
       }
     },
-    [syncNodeMavenUsage]
+    [syncNodeMavenUsage, syncExternalSources]
   );
 
   useEffect(() => {
@@ -231,22 +257,40 @@ export default function App() {
     return () => clearInterval(timer);
   }, [fetchClients, syncNodeMavenUsage]);
 
+  const externalSourceMap = useMemo(() => {
+    const map: Record<string, ExternalV2RaySource> = {};
+    for (const src of externalSources) {
+      map[src.id] = src;
+    }
+    return map;
+  }, [externalSources]);
+
+  const nearLimitExternalSources = useMemo(() => {
+    return externalSources.filter((s) => Boolean(s.userinfo?.near_limit));
+  }, [externalSources]);
+
   const clients = useMemo(() => {
     const map = new Map<string, ProxyClient>();
     for (const c of remoteClients) {
-      if (c.username === '__system_routing_rules__') continue;
+      if (isSystemConfigUsername(c.username)) continue;
       if (!localDelta.deletedIds.includes(c.id)) {
         map.set(c.id, c);
       }
     }
     for (const [id, c] of Object.entries(localDelta.upserted)) {
-      if (c.username === '__system_routing_rules__') continue;
+      if (isSystemConfigUsername(c.username)) continue;
       if (!localDelta.deletedIds.includes(id)) {
         map.set(id, c);
       }
     }
     return Array.from(map.values())
       .map((client) => {
+        const mode = client.service_mode || 'shamcash_sy';
+        const isNodeMavenBacked =
+          mode === 'shamcash_sy' ||
+          (mode === 'residential_custom' && (client.proxy_provider || 'nodemaven') === 'nodemaven');
+        if (!isNodeMavenBacked) return client;
+
         const subPrefix = String(client.proxy_username || '')
           .split('-country-')[0]
           .trim()
@@ -321,12 +365,30 @@ export default function App() {
     };
   }, [clients]);
 
+  const modeCounts = useMemo(() => {
+    let shamcash_sy = 0;
+    let residential_custom = 0;
+    let external_v2ray = 0;
+    for (const c of clients) {
+      const m = c.service_mode || 'shamcash_sy';
+      if (m === 'residential_custom') residential_custom++;
+      else if (m === 'external_v2ray') external_v2ray++;
+      else shamcash_sy++;
+    }
+    return { shamcash_sy, residential_custom, external_v2ray };
+  }, [clients]);
+
   const filteredClients = useMemo(() => {
     return clients.filter((client) => {
       const info = getClientStatusInfo(client);
       if (statusFilter === 'expiring_soon') {
         if (info.status !== 'active' || !info.isExpiringSoon) return false;
       } else if (statusFilter !== 'all' && info.status !== statusFilter) {
+        return false;
+      }
+
+      const clientMode = client.service_mode || 'shamcash_sy';
+      if (modeFilter !== 'all' && clientMode !== modeFilter) {
         return false;
       }
 
@@ -339,11 +401,26 @@ export default function App() {
         const matchProxyUser = client.proxy_username
           ? client.proxy_username.toLowerCase().includes(q)
           : false;
-        return matchUser || matchIp || matchPort || matchRegIp || matchProxyUser;
+        const country = getCountryInfo(client.country_code);
+        const matchCountry =
+          country.code.toLowerCase().includes(q) ||
+          country.nameAr.toLowerCase().includes(q) ||
+          country.nameEn.toLowerCase().includes(q);
+        const extSrc = client.external_source_id ? externalSourceMap[client.external_source_id] : null;
+        const matchExtSrc = extSrc ? extSrc.name.toLowerCase().includes(q) : false;
+        return (
+          matchUser ||
+          matchIp ||
+          matchPort ||
+          matchRegIp ||
+          matchProxyUser ||
+          matchCountry ||
+          matchExtSrc
+        );
       }
       return true;
     });
-  }, [clients, statusFilter, searchQuery]);
+  }, [clients, statusFilter, modeFilter, searchQuery, externalSourceMap]);
 
   // Direct Happ App Link Copy Handlers
   const handleCopyAndroidLink = () => {
@@ -640,7 +717,14 @@ export default function App() {
       clientData.proxy_username,
       clientData.proxy_password,
       clientData.quota_mb,
-      clientData.used_mb
+      clientData.used_mb,
+      {
+        service_mode: clientData.service_mode || 'shamcash_sy',
+        proxy_provider: clientData.proxy_provider || 'nodemaven',
+        country_code: clientData.country_code,
+        external_source_id: clientData.external_source_id,
+        external_custom_url: clientData.external_custom_url,
+      }
     );
     const dbPayload = {
       username: clientData.username,
@@ -810,6 +894,54 @@ export default function App() {
     setRefillingId(client.id);
 
     const quotaToRefill = client.quota_mb && client.quota_mb > 0 ? client.quota_mb : 50;
+    const isDataImpulse =
+      client.service_mode === 'residential_custom' && client.proxy_provider === 'dataimpulse';
+
+    if (isDataImpulse) {
+      try {
+        const packedHost = packProxyHostWithAuth(
+          client.proxy_host,
+          client.proxy_username,
+          client.proxy_password,
+          quotaToRefill,
+          0,
+          {
+            service_mode: client.service_mode,
+            proxy_provider: client.proxy_provider,
+            country_code: client.country_code,
+          }
+        );
+        const { data, error } = await supabase
+          .from('proxy_clients')
+          .update({
+            proxy_host: packedHost,
+            is_active: true,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', client.id)
+          .select();
+
+        if (!error && data && data.length > 0) {
+          const updated = normalizeProxyClient(data[0] as ProxyClient);
+          setRemoteClients((prev) => prev.map((c) => (c.id === client.id ? updated : c)));
+        } else {
+          setRemoteClients((prev) =>
+            prev.map((c) =>
+              c.id === client.id ? { ...c, quota_mb: quotaToRefill, used_mb: 0, is_active: true } : c
+            )
+          );
+        }
+        setJustRefilledId(client.id);
+        setTimeout(() => {
+          setJustRefilledId((prev) => (prev === client.id ? null : prev));
+        }, 3500);
+        showToast(`تم تصفير وإعادة ملء حصة البيانات لـ ${client.username} (0 / ${quotaToRefill}MB)`);
+      } finally {
+        setRefillingId(null);
+      }
+      return;
+    }
+
     const endpoints = [
       '/api/nodemaven/refill-traffic',
       'https://shamcash-proxy-api.vercel.app/api/nodemaven/refill-traffic',
@@ -882,6 +1014,32 @@ export default function App() {
     }
   };
 
+  // Probe External V2Ray Source directly from subscriber card
+  const handleProbeClientExternalSource = async (sourceId: string) => {
+    if (!sourceId || probingExternalId) return;
+    setProbingExternalId(sourceId);
+    try {
+      const res = await probeExternalV2RaySourceApi({ source_id: sourceId });
+      if (res.sources) {
+        setExternalSources(res.sources);
+      }
+      if (res.success) {
+        const ui = res.probe?.userinfo;
+        if (ui && ui.total_mb && ui.total_mb > 0) {
+          showToast(
+            `تحديث المصدر: ${formatDataMb(ui.used_mb || 0)} / ${formatDataMb(ui.total_mb)} (${ui.usage_pct || 0}%)`
+          );
+        } else {
+          showToast(`المصدر نشط · ${res.probe?.server_count || 0} خادم متاح`);
+        }
+      } else {
+        showToast(res.probe?.error_msg || res.error || 'تعذر فحص المصدر الخارجي');
+      }
+    } finally {
+      setProbingExternalId(null);
+    }
+  };
+
   // Open Smart Traffic Tracker Modal (either for a single subscriber or global radar)
   const openTrafficTracker = (client: ProxyClient | null = null) => {
     setTrackerClient(client);
@@ -894,6 +1052,10 @@ export default function App() {
     setRegeneratingId(client.id);
 
     const previousIp = verifiedIpMap[client.id]?.exit_ip || '';
+    const clientMode = client.service_mode || 'shamcash_sy';
+    const clientProvider = client.proxy_provider || 'nodemaven';
+    const clientCountry = client.country_code || 'SY';
+
     const endpoints = [
       '/api/nodemaven/regenerate',
       'https://shamcash-proxy-api.vercel.app/api/nodemaven/regenerate',
@@ -915,6 +1077,9 @@ export default function App() {
               quota_mb: client.quota_mb,
               used_mb: client.used_mb,
               previous_ip: previousIp,
+              service_mode: clientMode,
+              proxy_provider: clientProvider,
+              country_code: clientCountry,
             }),
           });
           if (res.ok) {
@@ -933,14 +1098,22 @@ export default function App() {
         .split('-country-')[0]
         .trim()
         .toLowerCase();
-      const nmSub = subPrefix ? nodeMavenMap[subPrefix] : undefined;
+      const nmSub =
+        clientProvider === 'nodemaven' && subPrefix ? nodeMavenMap[subPrefix] : undefined;
 
       const newProxyUsername =
         apiResult?.new_proxy_username ||
-        regenerateNodeMavenProxyUsername(
-          client.proxy_username,
-          nmSub?.proxy_username || client.username
-        ).newProxyUsername;
+        (clientMode === 'residential_custom'
+          ? regenerateProxyUsernameForMode(
+              clientProvider,
+              client.proxy_username,
+              nmSub?.proxy_username || client.username,
+              clientCountry
+            ).newProxyUsername
+          : regenerateNodeMavenProxyUsername(
+              client.proxy_username,
+              nmSub?.proxy_username || client.username
+            ).newProxyUsername);
 
       const officialPassword =
         apiResult?.proxy_password || nmSub?.proxy_password || client.proxy_password;
@@ -952,7 +1125,12 @@ export default function App() {
           newProxyUsername,
           officialPassword,
           client.quota_mb,
-          client.used_mb
+          client.used_mb,
+          {
+            service_mode: clientMode,
+            proxy_provider: clientProvider,
+            country_code: clientCountry,
+          }
         );
 
       const { data, error } = await supabase
@@ -1010,7 +1188,7 @@ export default function App() {
 
       if (apiResult?.live_check?.ok && apiResult.live_check.exit_ip) {
         showToast(
-          `تم توليد جلسة بروكسي جديدة · الـ IP الجديد: ${apiResult.live_check.exit_ip} (${apiResult.live_check.city || 'SY'})`
+          `تم توليد جلسة بروكسي جديدة · الـ IP الجديد: ${apiResult.live_check.exit_ip} (${apiResult.live_check.city || clientCountry})`
         );
       } else {
         showToast(`تم إعادة توليد جلسة البروكسي ومزامنتها لـ ${client.username}`);
@@ -1024,25 +1202,97 @@ export default function App() {
     if (!rawUsername) {
       return <span className="text-slate-500">بدون معرف جلسة</span>;
     }
-    const match = rawUsername.match(/^(.*?-sid-)([a-zA-Z0-9]+)(.*)$/i);
-    if (!match) {
-      return <span className="text-slate-200">{rawUsername}</span>;
+    const nmMatch = rawUsername.match(/^(.*?-sid-)([a-zA-Z0-9]+)(.*)$/i);
+    if (nmMatch) {
+      const [, beforeSid, sidValue, afterSid] = nmMatch;
+      return (
+        <>
+          <span className="text-slate-300">{beforeSid}</span>
+          <span
+            className={`px-1 py-0.5 rounded font-bold transition-colors ${
+              isHighlighted
+                ? 'bg-emerald-500 text-slate-950'
+                : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+            }`}
+          >
+            {sidValue}
+          </span>
+          <span className="text-slate-400">{afterSid}</span>
+        </>
+      );
     }
-    const [, beforeSid, sidValue, afterSid] = match;
+    const diMatch = rawUsername.match(/^(.*?;sessid\.)([a-zA-Z0-9]+)(.*)$/i);
+    if (diMatch) {
+      const [, beforeSid, sidValue, afterSid] = diMatch;
+      return (
+        <>
+          <span className="text-slate-300">{beforeSid}</span>
+          <span
+            className={`px-1 py-0.5 rounded font-bold transition-colors ${
+              isHighlighted
+                ? 'bg-sky-400 text-slate-950'
+                : 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
+            }`}
+          >
+            {sidValue}
+          </span>
+          <span className="text-slate-400">{afterSid}</span>
+        </>
+      );
+    }
+    return <span className="text-slate-200">{rawUsername}</span>;
+  };
+
+  const renderPackageAndCountryBadge = (client: ProxyClient) => {
+    const mode = client.service_mode || 'shamcash_sy';
+    const country = getCountryInfo(
+      client.country_code || (mode === 'external_v2ray' ? 'AUTO' : 'SY')
+    );
+
+    if (mode === 'residential_custom') {
+      const providerLabel =
+        (client.proxy_provider || 'nodemaven') === 'dataimpulse' ? 'DataImpulse' : 'NodeMaven';
+      return (
+        <div className="flex items-center flex-wrap gap-1">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-950/75 border border-sky-700/60 text-[10px] font-bold text-sky-300 whitespace-nowrap">
+            <Globe className="w-3 h-3 text-sky-400 shrink-0" />
+            <span>بروكسي منزلي</span>
+            <span className="text-sky-500/70">·</span>
+            <span>
+              {country.flag} {country.nameAr} ({country.code})
+            </span>
+          </span>
+          <span className="px-1.5 py-0.5 rounded bg-slate-800/90 border border-slate-700/80 text-[9px] font-mono font-semibold text-slate-300">
+            {providerLabel}
+          </span>
+        </div>
+      );
+    }
+
+    if (mode === 'external_v2ray') {
+      return (
+        <div className="flex items-center flex-wrap gap-1">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-violet-950/75 border border-violet-700/60 text-[10px] font-bold text-violet-300 whitespace-nowrap">
+            <Zap className="w-3 h-3 text-violet-400 shrink-0" />
+            <span>VPN عام V2Ray</span>
+            <span className="text-violet-500/70">·</span>
+            <span>
+              {country.flag} {country.nameAr}
+            </span>
+          </span>
+        </div>
+      );
+    }
+
     return (
-      <>
-        <span className="text-slate-300">{beforeSid}</span>
-        <span
-          className={`px-1 py-0.5 rounded font-bold transition-colors ${
-            isHighlighted
-              ? 'bg-emerald-500 text-slate-950'
-              : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-          }`}
-        >
-          {sidValue}
+      <div className="flex items-center flex-wrap gap-1">
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-950/75 border border-emerald-700/60 text-[10px] font-bold text-emerald-300 whitespace-nowrap">
+          <ShieldCheck className="w-3 h-3 text-emerald-400 shrink-0" />
+          <span>شام كاش</span>
+          <span className="text-emerald-600/80">·</span>
+          <span>🇸🇾 سوريا (SY)</span>
         </span>
-        <span className="text-slate-400">{afterSid}</span>
-      </>
+      </div>
     );
   };
 
@@ -1208,7 +1458,7 @@ export default function App() {
                 VPN ALISHOP
               </span>
               <span className="hidden sm:block text-[10px] text-slate-400 font-medium">
-                بوابة إدارة اشتراكات وخوادم شام كاش
+                منصة إدارة اشتراكات شام كاش والبروكسي و VPN
               </span>
             </div>
           </a>
@@ -1294,12 +1544,27 @@ export default function App() {
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 max-w-full">
             <button
               type="button"
+              onClick={() => setExternalSourcesModalOpen(true)}
+              className="hidden lg:flex h-9 px-3 text-xs font-bold text-violet-300 hover:text-white bg-violet-950/70 hover:bg-violet-600 border border-violet-700/70 rounded-xl transition-colors items-center gap-1.5 whitespace-nowrap shrink-0 relative"
+              title="إدارة مصادر VPN عام (سيرفرات V2Ray / VLESS / Trojan الخارجية)"
+            >
+              <Zap className="w-4 h-4 text-violet-400 shrink-0" />
+              <span>مصادر V2Ray</span>
+              {nearLimitExternalSources.length > 0 && (
+                <span className="px-1.5 py-0.5 rounded-md bg-amber-500 text-slate-950 text-[10px] font-extrabold font-mono leading-none">
+                  {nearLimitExternalSources.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
               onClick={() => openTrafficTracker(null)}
-              className="hidden lg:flex h-9 px-3.5 text-xs font-bold text-sky-300 hover:text-white bg-sky-950/70 hover:bg-sky-600 border border-sky-700/70 rounded-xl transition-colors items-center gap-1.5 whitespace-nowrap shrink-0"
+              className="hidden lg:flex h-9 px-3 text-xs font-bold text-sky-300 hover:text-white bg-sky-950/70 hover:bg-sky-600 border border-sky-700/70 rounded-xl transition-colors items-center gap-1.5 whitespace-nowrap shrink-0"
               title="رادار التتبع الذكي للصرف وحظر العناوين الخارجة عن شام كاش"
             >
               <Activity className="w-4 h-4 text-sky-400 shrink-0" />
-              <span>رادار الصرف وحظر العناوين</span>
+              <span>رادار الصرف</span>
             </button>
 
             <button
@@ -1338,14 +1603,28 @@ export default function App() {
       <main className="flex-1 max-w-[1440px] w-full mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-5">
         {/* Mobile & Tablet Quick Tools Bar (Visible below lg breakpoint) */}
         <div className="space-y-2 lg:hidden">
-          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+          <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
+            <button
+              type="button"
+              onClick={() => setExternalSourcesModalOpen(true)}
+              className="py-2 px-2.5 rounded-xl text-xs font-bold bg-violet-950/80 hover:bg-violet-800 border border-violet-700/70 text-violet-200 flex items-center justify-center gap-1.5 min-w-0"
+            >
+              <Zap className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+              <span className="truncate">مصادر V2Ray</span>
+              {nearLimitExternalSources.length > 0 && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 text-[10px] font-extrabold font-mono leading-none shrink-0">
+                  {nearLimitExternalSources.length}
+                </span>
+              )}
+            </button>
+
             <button
               type="button"
               onClick={() => openTrafficTracker(null)}
-              className="flex-1 min-w-[180px] py-2 px-3 rounded-xl text-xs font-bold bg-sky-950/80 hover:bg-sky-800 border border-sky-700/70 text-sky-300 flex items-center justify-center gap-1.5"
+              className="py-2 px-2.5 rounded-xl text-xs font-bold bg-sky-950/80 hover:bg-sky-800 border border-sky-700/70 text-sky-300 flex items-center justify-center gap-1.5 min-w-0"
             >
-              <Activity className="w-4 h-4 text-sky-400 shrink-0" />
-              <span className="truncate">رادار التتبع الذكي للصرف وحظر العناوين</span>
+              <Activity className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+              <span className="truncate">رادار الصرف والحظر</span>
             </button>
           </div>
 
@@ -1457,37 +1736,112 @@ export default function App() {
           </div>
         </section>
 
-        {/* Search & Filter Bar */}
-        <section className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-[#0E131F] border border-slate-800/80 rounded-2xl p-3">
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 text-slate-500 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="بحث باسم المشترك، المعرف الفرعي، أو عنوان البروكسي..."
-              className="w-full bg-[#070A10] border border-slate-800/90 focus:border-emerald-500 rounded-xl pr-10 pl-4 py-2 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none transition-colors"
-            />
+        {/* External V2Ray Near-Exhaustion Alert Banner (shown only when a source is near limit) */}
+        {nearLimitExternalSources.length > 0 && (
+          <section className="bg-amber-950/35 border border-amber-600/60 rounded-2xl px-4 py-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2.5 text-xs text-amber-200">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>
+                <strong className="text-amber-300">تنبيه قرب نفاد مصادر V2Ray الخارجية:</strong>{' '}
+                {nearLimitExternalSources
+                  .map(
+                    (s) =>
+                      `${s.name} (${
+                        s.userinfo?.total_mb
+                          ? `${s.userinfo.usage_pct ?? 0}% مستهلك`
+                          : 'قرب الانتهاء'
+                      })`
+                  )
+                  .join(' · ')}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setExternalSourcesModalOpen(true)}
+              className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold whitespace-nowrap shrink-0 transition-colors"
+            >
+              فحص وتجديد المصادر
+            </button>
+          </section>
+        )}
+
+        {/* Search & Filter Bar (Status + Service Mode Filters) */}
+        <section className="flex flex-col gap-2.5 bg-[#0E131F] border border-slate-800/80 rounded-2xl p-3">
+          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-slate-500 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="بحث باسم المشترك، الدولة، المزود، المصدر الخارجي، أو عنوان البروكسي..."
+                className="w-full bg-[#070A10] border border-slate-800/90 focus:border-emerald-500 rounded-xl pr-10 pl-4 py-2 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none transition-colors"
+              />
+            </div>
+
+            <div className="flex items-center gap-1 p-1 bg-[#070A10] border border-slate-800/90 rounded-xl overflow-x-auto">
+              {(
+                [
+                  { id: 'all', label: `الكل (${stats.total})` },
+                  { id: 'active', label: `نشط (${stats.active})` },
+                  { id: 'expiring_soon', label: `ينتهي قريباً (${stats.expiringSoon})` },
+                  { id: 'expired', label: `منتهي (${stats.expired})` },
+                  { id: 'inactive', label: `موقوف (${stats.inactive})` },
+                ] as { id: FilterTab; label: string }[]
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setStatusFilter(tab.id)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+                    statusFilter === tab.id
+                      ? 'bg-slate-800 text-white'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
           </div>
 
-          <div className="flex items-center gap-1 p-1 bg-[#070A10] border border-slate-800/90 rounded-xl overflow-x-auto">
+          {/* Package / Service Mode Filter Row */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pt-2 border-t border-slate-800/70">
+            <span className="text-[11px] font-semibold text-slate-500 shrink-0 ml-1">
+              تصفية حسب الباقة:
+            </span>
             {(
               [
-                { id: 'all', label: `الكل (${stats.total})` },
-                { id: 'active', label: `نشط (${stats.active})` },
-                { id: 'expiring_soon', label: `ينتهي قريباً (${stats.expiringSoon})` },
-                { id: 'expired', label: `منتهي (${stats.expired})` },
-                { id: 'inactive', label: `موقوف (${stats.inactive})` },
-              ] as { id: FilterTab; label: string }[]
+                {
+                  id: 'all',
+                  label: `جميع الباقات (${stats.total})`,
+                  activeClass: 'bg-slate-800 text-white border-slate-700',
+                },
+                {
+                  id: 'shamcash_sy',
+                  label: `شام كاش · سوريا (${modeCounts.shamcash_sy})`,
+                  activeClass: 'bg-emerald-950/80 text-emerald-300 border-emerald-700/70',
+                },
+                {
+                  id: 'residential_custom',
+                  label: `بروكسي منزلي مخصص (${modeCounts.residential_custom})`,
+                  activeClass: 'bg-sky-950/80 text-sky-300 border-sky-700/70',
+                },
+                {
+                  id: 'external_v2ray',
+                  label: `VPN عام V2Ray (${modeCounts.external_v2ray})`,
+                  activeClass: 'bg-violet-950/80 text-violet-300 border-violet-700/70',
+                },
+              ] as { id: ModeFilterTab; label: string; activeClass: string }[]
             ).map((tab) => (
               <button
                 key={tab.id}
                 type="button"
-                onClick={() => setStatusFilter(tab.id)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
-                  statusFilter === tab.id
-                    ? 'bg-slate-800 text-white'
-                    : 'text-slate-400 hover:text-slate-200'
+                onClick={() => setModeFilter(tab.id)}
+                className={`px-3 py-1 text-[11px] font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                  modeFilter === tab.id
+                    ? tab.activeClass
+                    : 'bg-[#070A10] border-slate-800/80 text-slate-400 hover:text-slate-200'
                 }`}
               >
                 {tab.label}
@@ -1509,17 +1863,18 @@ export default function App() {
         ) : filteredClients.length === 0 ? (
           <div className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-12 text-center space-y-3">
             <div className="text-sm font-semibold text-slate-300">
-              {searchQuery || statusFilter !== 'all'
+              {searchQuery || statusFilter !== 'all' || modeFilter !== 'all'
                 ? 'لا توجد نتائج مطابقة'
                 : 'لا يوجد مشتركون حالياً'}
             </div>
             <div>
-              {searchQuery || statusFilter !== 'all' ? (
+              {searchQuery || statusFilter !== 'all' || modeFilter !== 'all' ? (
                 <button
                   type="button"
                   onClick={() => {
                     setSearchQuery('');
                     setStatusFilter('all');
+                    setModeFilter('all');
                   }}
                   className="px-4 py-2 text-xs font-semibold text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-xl transition-colors"
                 >
@@ -1561,13 +1916,23 @@ export default function App() {
                       const boundDevice = client.registered_ip ? client.registered_ip.trim() : null;
                       const proxyDetails = parseProxyDetails(client);
 
+                      const clientMode = client.service_mode || 'shamcash_sy';
+                      const countryInfo = getCountryInfo(
+                        client.country_code || (clientMode === 'external_v2ray' ? 'AUTO' : 'SY')
+                      );
+                      const linkedExtSource = client.external_source_id
+                        ? externalSourceMap[client.external_source_id]
+                        : undefined;
+                      const extUserinfo = linkedExtSource?.userinfo;
+
                       const quotaMb = client.quota_mb && client.quota_mb > 0 ? client.quota_mb : 0;
                       const usedMb = client.used_mb && client.used_mb >= 0 ? client.used_mb : 0;
                       const remainingMb =
                         quotaMb > 0 ? Math.max(0, Number((quotaMb - usedMb).toFixed(1))) : 0;
                       const usagePct =
                         quotaMb > 0 ? Math.min(100, Math.round((usedMb / quotaMb) * 100)) : 0;
-                      const isQuotaExhausted = quotaMb > 0 && usedMb >= quotaMb;
+                      const isQuotaExhausted =
+                        clientMode !== 'external_v2ray' && quotaMb > 0 && usedMb >= quotaMb;
 
                       const rawHwid = boundDevice
                         ? boundDevice.replace(/^HWID:/i, '').trim()
@@ -1580,9 +1945,9 @@ export default function App() {
                       return (
                         <React.Fragment key={client.id}>
                           <tr className="hover:bg-slate-800/20 transition-colors">
-                            {/* Column 1: Subscriber Identity & Active Status */}
+                            {/* Column 1: Subscriber Identity, Package & Country Badge, Active Status */}
                             <td className="py-3.5 px-4 align-middle whitespace-nowrap">
-                              <div className="bg-[#070A10] border border-slate-800/90 rounded-xl p-3 min-w-[175px] space-y-2">
+                              <div className="bg-[#070A10] border border-slate-800/90 rounded-xl p-3 min-w-[215px] space-y-2">
                                 <div className="flex items-center justify-between gap-2">
                                   <span
                                     className="font-mono font-extrabold text-sm text-white tracking-tight"
@@ -1616,133 +1981,275 @@ export default function App() {
                                   )}
                                 </div>
 
+                                {/* Required Clear Package Type & Country Badge */}
+                                {renderPackageAndCountryBadge(client)}
+
                                 <div className="flex items-center justify-between gap-1.5 pt-1.5 border-t border-slate-800/70 text-[11px]">
-                                  <span className="text-slate-500">المعرف الفرعي:</span>
-                                  <span
-                                    className="font-mono font-semibold text-sky-400 truncate max-w-[115px]"
-                                    dir="ltr"
-                                    title={proxyDetails.subUser || client.username}
-                                  >
-                                    {proxyDetails.subUser || client.username}
-                                  </span>
+                                  {clientMode === 'external_v2ray' ? (
+                                    <>
+                                      <span className="text-slate-500">المصدر:</span>
+                                      <span
+                                        className="font-semibold text-violet-300 truncate max-w-[140px]"
+                                        title={linkedExtSource?.name || 'رابط خارجي مخصص'}
+                                      >
+                                        {linkedExtSource?.name || 'رابط خارجي مخصص'}
+                                      </span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span className="text-slate-500">المعرف الفرعي:</span>
+                                      <span
+                                        className="font-mono font-semibold text-sky-400 truncate max-w-[125px]"
+                                        dir="ltr"
+                                        title={proxyDetails.subUser || client.username}
+                                      >
+                                        {proxyDetails.subUser || client.username}
+                                      </span>
+                                    </>
+                                  )}
                                 </div>
                               </div>
                             </td>
 
                             {/* Column 2: Data Quota & Traffic Control Card */}
                             <td className="py-3.5 px-4 align-middle whitespace-nowrap">
-                              <div className="bg-[#070A10] border border-slate-800/90 rounded-xl p-3 w-[255px] space-y-2">
-                                {quotaMb > 0 ? (
-                                  <>
-                                    <div className="flex items-center justify-between text-[11px]">
-                                      <span className="text-slate-400 flex items-center gap-1">
-                                        <HardDrive className="w-3 h-3 text-emerald-400" />
-                                        <span>المستهلك:</span>
-                                      </span>
-                                      <span
-                                        className="font-mono tabular-nums font-bold text-slate-100"
-                                        dir="ltr"
-                                      >
-                                        {formatDataMb(usedMb)} / {formatDataMb(quotaMb)}
-                                      </span>
-                                    </div>
-
-                                    <div className="w-full h-1.5 bg-slate-800/90 rounded-full overflow-hidden">
-                                      <div
-                                        className={`h-full rounded-full transition-all duration-300 ${
-                                          usagePct >= 90
-                                            ? 'bg-rose-500'
-                                            : usagePct >= 75
-                                            ? 'bg-amber-400'
-                                            : 'bg-emerald-500'
-                                        }`}
-                                        style={{ width: `${usagePct}%` }}
-                                      />
-                                    </div>
-
-                                    <div className="flex items-center justify-between text-[10px] text-slate-400">
-                                      <span>
-                                        {isQuotaExhausted ? (
-                                          <span className="text-rose-400 font-semibold">
-                                            انتهت الحصة المخصصة
+                              {clientMode === 'external_v2ray' ? (
+                                <div
+                                  className={`bg-[#070A10] border rounded-xl p-3 w-[255px] space-y-2 ${
+                                    extUserinfo?.near_limit
+                                      ? 'border-amber-500/70'
+                                      : 'border-slate-800/90'
+                                  }`}
+                                >
+                                  {extUserinfo && extUserinfo.total_mb && extUserinfo.total_mb > 0 ? (
+                                    <>
+                                      <div className="flex items-center justify-between text-[11px]">
+                                        <span className="text-slate-400 flex items-center gap-1">
+                                          <Zap className="w-3 h-3 text-violet-400" />
+                                          <span>استهلاك المصدر:</span>
+                                        </span>
+                                        <span
+                                          className="font-mono tabular-nums font-bold text-slate-100"
+                                          dir="ltr"
+                                        >
+                                          {formatDataMb(extUserinfo.used_mb || 0)} /{' '}
+                                          {formatDataMb(extUserinfo.total_mb)}
+                                        </span>
+                                      </div>
+                                      <div className="w-full h-1.5 bg-slate-800/90 rounded-full overflow-hidden">
+                                        <div
+                                          className={`h-full rounded-full transition-all duration-300 ${
+                                            (extUserinfo.usage_pct || 0) >= 85
+                                              ? 'bg-rose-500'
+                                              : (extUserinfo.usage_pct || 0) >= 70
+                                              ? 'bg-amber-400'
+                                              : 'bg-violet-500'
+                                          }`}
+                                          style={{
+                                            width: `${Math.min(100, extUserinfo.usage_pct || 0)}%`,
+                                          }}
+                                        />
+                                      </div>
+                                      <div className="flex items-center justify-between text-[10px]">
+                                        {extUserinfo.near_limit ? (
+                                          <span className="text-amber-400 font-bold flex items-center gap-1">
+                                            <AlertTriangle className="w-3 h-3 shrink-0" />
+                                            <span>قرب النفاد!</span>
                                           </span>
                                         ) : (
-                                          <>
+                                          <span className="text-slate-400">
                                             المتبقي:{' '}
                                             <strong
                                               className="text-emerald-400 font-mono"
                                               dir="ltr"
                                             >
-                                              {formatDataMb(remainingMb)}
+                                              {formatDataMb(extUserinfo.remaining_mb || 0)}
                                             </strong>
-                                          </>
+                                          </span>
                                         )}
+                                        <span className="font-mono text-slate-300">
+                                          {extUserinfo.usage_pct || 0}%
+                                        </span>
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400 py-1">
+                                      <span className="flex items-center gap-1.5">
+                                        <Zap className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+                                        <span>
+                                          {linkedExtSource
+                                            ? 'توزيع ديناميكي (Userinfo غير متوفر)'
+                                            : 'رابط V2Ray مخصص (مدة زمنية)'}
+                                        </span>
                                       </span>
-                                      <span className="font-mono tabular-nums">{usagePct}%</span>
+                                      <span className="text-[10px] font-mono text-violet-300">
+                                        ∞
+                                      </span>
                                     </div>
-                                  </>
-                                ) : (
-                                  <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400 py-1">
-                                    <span className="flex items-center gap-1.5">
-                                      <HardDrive className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                                      <span>
-                                        {!nodeMavenConnected
-                                          ? 'جاري مزامنة الحصة...'
+                                  )}
+
+                                  <div className="grid grid-cols-2 gap-1.5 pt-1.5 border-t border-slate-800/80">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        linkedExtSource
+                                          ? handleProbeClientExternalSource(linkedExtSource.id)
+                                          : setExternalSourcesModalOpen(true)
+                                      }
+                                      disabled={
+                                        Boolean(linkedExtSource) &&
+                                        probingExternalId === linkedExtSource?.id
+                                      }
+                                      className="h-7 px-2 rounded-lg text-[10px] font-bold bg-violet-950/70 hover:bg-violet-600 text-violet-200 hover:text-white border border-violet-800/60 flex items-center justify-center gap-1 transition-colors"
+                                    >
+                                      <RefreshCw
+                                        className={`w-3 h-3 shrink-0 ${
+                                          linkedExtSource &&
+                                          probingExternalId === linkedExtSource.id
+                                            ? 'animate-spin'
+                                            : ''
+                                        }`}
+                                      />
+                                      <span className="truncate">فحص الاستهلاك</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setExternalSourcesModalOpen(true)}
+                                      className="h-7 px-2 rounded-lg text-[10px] font-bold bg-[#0E131F] hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 flex items-center justify-center gap-1 transition-colors"
+                                    >
+                                      <Zap className="w-3 h-3 text-violet-400 shrink-0" />
+                                      <span className="truncate">المصادر</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="bg-[#070A10] border border-slate-800/90 rounded-xl p-3 w-[255px] space-y-2">
+                                  {quotaMb > 0 ? (
+                                    <>
+                                      <div className="flex items-center justify-between text-[11px]">
+                                        <span className="text-slate-400 flex items-center gap-1">
+                                          <HardDrive className="w-3 h-3 text-emerald-400" />
+                                          <span>المستهلك:</span>
+                                        </span>
+                                        <span
+                                          className="font-mono tabular-nums font-bold text-slate-100"
+                                          dir="ltr"
+                                        >
+                                          {formatDataMb(usedMb)} / {formatDataMb(quotaMb)}
+                                        </span>
+                                      </div>
+
+                                      <div className="w-full h-1.5 bg-slate-800/90 rounded-full overflow-hidden">
+                                        <div
+                                          className={`h-full rounded-full transition-all duration-300 ${
+                                            usagePct >= 90
+                                              ? 'bg-rose-500'
+                                              : usagePct >= 75
+                                              ? 'bg-amber-400'
+                                              : 'bg-emerald-500'
+                                          }`}
+                                          style={{ width: `${usagePct}%` }}
+                                        />
+                                      </div>
+
+                                      <div className="flex items-center justify-between text-[10px] text-slate-400">
+                                        <span>
+                                          {isQuotaExhausted ? (
+                                            <span className="text-rose-400 font-semibold">
+                                              انتهت الحصة المخصصة
+                                            </span>
+                                          ) : (
+                                            <>
+                                              المتبقي:{' '}
+                                              <strong
+                                                className="text-emerald-400 font-mono"
+                                                dir="ltr"
+                                              >
+                                                {formatDataMb(remainingMb)}
+                                              </strong>
+                                            </>
+                                          )}
+                                        </span>
+                                        <span className="font-mono tabular-nums">{usagePct}%</span>
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400 py-1">
+                                      <span className="flex items-center gap-1.5">
+                                        <HardDrive className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                        <span>
+                                          {client.proxy_provider === 'dataimpulse'
+                                            ? 'حصة DataImpulse (غير محددة)'
+                                            : !nodeMavenConnected
+                                            ? 'جاري مزامنة الحصة...'
+                                            : proxyDetails.subUser &&
+                                              nodeMavenMap[proxyDetails.subUser.toLowerCase()]
+                                            ? 'مفتوح (من الرصيد العام)'
+                                            : 'المعرف غير مسجل في الخادم'}
+                                        </span>
+                                      </span>
+                                      <span className="text-[10px] font-mono text-amber-400">
+                                        {client.proxy_provider === 'dataimpulse'
+                                          ? '∞'
+                                          : !nodeMavenConnected
+                                          ? '...'
                                           : proxyDetails.subUser &&
                                             nodeMavenMap[proxyDetails.subUser.toLowerCase()]
-                                          ? 'مفتوح (من الرصيد العام)'
-                                          : 'المعرف غير مسجل في الخادم'}
+                                          ? '∞'
+                                          : 'غير متوفر'}
                                       </span>
-                                    </span>
-                                    <span className="text-[10px] font-mono text-amber-400">
-                                      {!nodeMavenConnected
-                                        ? '...'
-                                        : proxyDetails.subUser &&
-                                          nodeMavenMap[proxyDetails.subUser.toLowerCase()]
-                                        ? '∞'
-                                        : 'غير متوفر'}
-                                    </span>
-                                  </div>
-                                )}
+                                    </div>
+                                  )}
 
-                                {/* Equal-Width Symmetrical Traffic Action Buttons */}
-                                <div className="grid grid-cols-2 gap-1.5 pt-1.5 border-t border-slate-800/80">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRefillTraffic(client)}
-                                    disabled={refillingId === client.id}
-                                    title="إعادة ملء وتصفير حصة البيانات لهذا المشترك فوراً"
-                                    className={`h-7 px-2 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 border transition-colors ${
-                                      justRefilledId === client.id
-                                        ? 'bg-emerald-600 border-emerald-400 text-white'
-                                        : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/60'
-                                    }`}
-                                  >
-                                    <RotateCcw
-                                      className={`w-3 h-3 shrink-0 ${
-                                        refillingId === client.id ? 'animate-spin' : ''
+                                  {/* Equal-Width Symmetrical Traffic Action Buttons */}
+                                  <div className="grid grid-cols-2 gap-1.5 pt-1.5 border-t border-slate-800/80">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRefillTraffic(client)}
+                                      disabled={refillingId === client.id}
+                                      title="إعادة ملء وتصفير حصة البيانات لهذا المشترك فوراً"
+                                      className={`h-7 px-2 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 border transition-colors ${
+                                        justRefilledId === client.id
+                                          ? 'bg-emerald-600 border-emerald-400 text-white'
+                                          : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/60'
                                       }`}
-                                    />
-                                    <span className="truncate">
-                                      {refillingId === client.id
-                                        ? 'يعيد الملء...'
-                                        : justRefilledId === client.id
-                                        ? 'تم الملء ✓'
-                                        : 'إعادة ملء'}
-                                    </span>
-                                  </button>
+                                    >
+                                      <RotateCcw
+                                        className={`w-3 h-3 shrink-0 ${
+                                          refillingId === client.id ? 'animate-spin' : ''
+                                        }`}
+                                      />
+                                      <span className="truncate">
+                                        {refillingId === client.id
+                                          ? 'يعيد الملء...'
+                                          : justRefilledId === client.id
+                                          ? 'تم الملء ✓'
+                                          : 'إعادة ملء'}
+                                      </span>
+                                    </button>
 
-                                  <button
-                                    type="button"
-                                    onClick={() => openTrafficTracker(client)}
-                                    title="تتبع ذكي للمواقع التي تستهلك باقة هذا المشترك مع إمكانية حظر أي عنوان"
-                                    className="h-7 px-2 rounded-lg text-[10px] font-bold bg-sky-950/70 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-800/60 flex items-center justify-center gap-1 transition-colors"
-                                  >
-                                    <Activity className="w-3 h-3 shrink-0" />
-                                    <span className="truncate">تتبع الصرف</span>
-                                  </button>
+                                    {clientMode === 'residential_custom' ? (
+                                      <div
+                                        className="h-7 px-2 rounded-lg text-[10px] font-bold bg-sky-950/40 text-sky-300 border border-sky-800/50 flex items-center justify-center gap-1"
+                                        title="وضع التصفح المفتوح متجاوزاً حظر العناوين"
+                                      >
+                                        <Globe className="w-3 h-3 shrink-0 text-sky-400" />
+                                        <span className="truncate">تصفح مفتوح</span>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => openTrafficTracker(client)}
+                                        title="تتبع ذكي للمواقع التي تستهلك باقة هذا المشترك مع إمكانية حظر أي عنوان"
+                                        className="h-7 px-2 rounded-lg text-[10px] font-bold bg-sky-950/70 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-800/60 flex items-center justify-center gap-1 transition-colors"
+                                      >
+                                        <Activity className="w-3 h-3 shrink-0" />
+                                        <span className="truncate">تتبع الصرف</span>
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
+                              )}
                             </td>
 
                             {/* Column 3: Expiry Date & Quick Extend Card */}
@@ -1784,93 +2291,146 @@ export default function App() {
                               </div>
                             </td>
 
-                            {/* Column 4: Proxy Gateway & Session Card */}
+                            {/* Column 4: Proxy Gateway & Session Card (or External V2Ray Source Card) */}
                             <td className="py-3.5 px-4 align-middle whitespace-nowrap">
-                              <div
-                                className={`bg-[#070A10] border rounded-xl p-3 w-[325px] space-y-2 transition-colors ${
-                                  justRegeneratedId === client.id
-                                    ? 'border-emerald-500/90 shadow-md shadow-emerald-950/50'
-                                    : 'border-slate-800/90'
-                                }`}
-                              >
-                                <div className="flex items-center justify-between gap-2">
-                                  <div
-                                    className="inline-flex items-center gap-1.5 font-mono text-xs font-semibold tabular-nums text-slate-100"
-                                    dir="ltr"
-                                  >
-                                    <Server className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                                    <span>
-                                      {proxyDetails.cleanHost}:{client.proxy_port}
-                                    </span>
-                                  </div>
-                                  <span className="px-1.5 py-0.5 rounded-md bg-emerald-950/70 border border-emerald-800/60 text-[10px] font-mono font-bold text-emerald-300">
-                                    {proxyDetails.countryCode || 'SY'} 🇸🇾
-                                  </span>
-                                </div>
-
-                                <div className="flex items-center gap-1.5 pt-1.5 border-t border-slate-800/80">
-                                  <div
-                                    className="flex-1 min-w-0 bg-[#0B0F19] border border-slate-800/90 rounded-lg px-2 py-1 font-mono text-[11px] overflow-x-auto scrollbar-none whitespace-nowrap"
-                                    dir="ltr"
-                                    title={proxyDetails.fullProxyUsername}
-                                  >
-                                    {renderProxyStringWithHighlightedSid(
-                                      proxyDetails.fullProxyUsername,
-                                      justRegeneratedId === client.id
-                                    )}
-                                  </div>
-
-                                  <button
-                                    type="button"
-                                    onClick={() => handleCheckProxyIp(client)}
-                                    disabled={checkingIpId === client.id || regeneratingId === client.id}
-                                    title="فحص عنوان الـ IP الفعلي الحالي لهذه الجلسة"
-                                    className="h-7 px-2 rounded-lg text-[10px] font-bold bg-[#0B0F19] hover:bg-slate-800 text-sky-300 border border-slate-800 shrink-0 transition-colors"
-                                  >
-                                    {checkingIpId === client.id ? 'يفحص...' : 'فحص IP'}
-                                  </button>
-
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRegenerateProxy(client)}
-                                    disabled={regeneratingId === client.id}
-                                    title="توليد جلسة بروكسي جديدة وتفعيل IP جديد فوراً"
-                                    className={`h-7 px-2.5 rounded-lg text-[10px] font-bold flex items-center gap-1 shrink-0 border transition-all ${
-                                      justRegeneratedId === client.id
-                                        ? 'bg-emerald-600 border-emerald-400 text-white'
-                                        : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/70'
-                                    }`}
-                                  >
-                                    <RefreshCw
-                                      className={`w-3 h-3 ${
-                                        regeneratingId === client.id ? 'animate-spin' : ''
-                                      }`}
-                                    />
-                                    <span>
-                                      {regeneratingId === client.id
-                                        ? 'يولّد...'
-                                        : justRegeneratedId === client.id
-                                        ? 'تغيرت ✓'
-                                        : 'توليد جلسة'}
-                                    </span>
-                                  </button>
-                                </div>
-
-                                {verifiedIpMap[client.id]?.ok && verifiedIpMap[client.id]?.exit_ip && (
-                                  <div className="flex items-center justify-between gap-2 px-2 py-1 rounded-lg bg-emerald-950/40 border border-emerald-800/50 text-[10px]">
-                                    <span className="text-emerald-300 font-medium">
-                                      عنوان الـ IP الفعلي:
-                                    </span>
-                                    <span className="font-mono font-bold text-white" dir="ltr">
-                                      {verifiedIpMap[client.id].exit_ip} ·{' '}
-                                      <span className="text-emerald-400 font-normal">
-                                        {verifiedIpMap[client.id].city || 'SY'} (
-                                        {verifiedIpMap[client.id].isp || 'ISP'})
+                              {clientMode === 'external_v2ray' ? (
+                                <div className="bg-[#070A10] border border-violet-900/60 rounded-xl p-3 w-[325px] space-y-2">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="inline-flex items-center gap-1.5 text-xs font-bold text-violet-200 min-w-0">
+                                      <Zap className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+                                      <span className="truncate">
+                                        {linkedExtSource?.name || 'رابط V2Ray خارجي مباشر'}
                                       </span>
+                                    </div>
+                                    <span className="px-1.5 py-0.5 rounded-md bg-violet-950/70 border border-violet-800/60 text-[10px] font-mono font-bold text-violet-300 shrink-0">
+                                      {countryInfo.code} {countryInfo.flag}
                                     </span>
                                   </div>
-                                )}
-                              </div>
+                                  <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80 text-[11px]">
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                      {(linkedExtSource?.protocols?.length
+                                        ? linkedExtSource.protocols
+                                        : ['VLESS / Trojan']
+                                      ).map((proto) => (
+                                        <span
+                                          key={proto}
+                                          className="px-1.5 py-0.5 rounded bg-sky-950/60 border border-sky-800/50 text-[10px] font-mono text-sky-300"
+                                        >
+                                          {proto}
+                                        </span>
+                                      ))}
+                                      {linkedExtSource?.server_count ? (
+                                        <span className="text-[10px] text-slate-400 font-mono">
+                                          · {linkedExtSource.server_count} سيرفر
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    <span className="text-[10px] text-emerald-400 font-semibold">
+                                      رابط ديناميكي
+                                    </span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div
+                                  className={`bg-[#070A10] border rounded-xl p-3 w-[325px] space-y-2 transition-colors ${
+                                    justRegeneratedId === client.id
+                                      ? 'border-emerald-500/90 shadow-md shadow-emerald-950/50'
+                                      : 'border-slate-800/90'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div
+                                      className="inline-flex items-center gap-1.5 font-mono text-xs font-semibold tabular-nums text-slate-100"
+                                      dir="ltr"
+                                    >
+                                      <Server
+                                        className={`w-3.5 h-3.5 shrink-0 ${
+                                          clientMode === 'residential_custom'
+                                            ? 'text-sky-400'
+                                            : 'text-emerald-400'
+                                        }`}
+                                      />
+                                      <span>
+                                        {proxyDetails.cleanHost}:{client.proxy_port}
+                                      </span>
+                                    </div>
+                                    <span
+                                      className={`px-1.5 py-0.5 rounded-md border text-[10px] font-mono font-bold ${
+                                        clientMode === 'residential_custom'
+                                          ? 'bg-sky-950/70 border-sky-800/60 text-sky-300'
+                                          : 'bg-emerald-950/70 border-emerald-800/60 text-emerald-300'
+                                      }`}
+                                    >
+                                      {countryInfo.code} {countryInfo.flag}
+                                    </span>
+                                  </div>
+
+                                  <div className="flex items-center gap-1.5 pt-1.5 border-t border-slate-800/80">
+                                    <div
+                                      className="flex-1 min-w-0 bg-[#0B0F19] border border-slate-800/90 rounded-lg px-2 py-1 font-mono text-[11px] overflow-x-auto scrollbar-none whitespace-nowrap"
+                                      dir="ltr"
+                                      title={proxyDetails.fullProxyUsername}
+                                    >
+                                      {renderProxyStringWithHighlightedSid(
+                                        proxyDetails.fullProxyUsername,
+                                        justRegeneratedId === client.id
+                                      )}
+                                    </div>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCheckProxyIp(client)}
+                                      disabled={
+                                        checkingIpId === client.id || regeneratingId === client.id
+                                      }
+                                      title="فحص عنوان الـ IP الفعلي الحالي لهذه الجلسة"
+                                      className="h-7 px-2 rounded-lg text-[10px] font-bold bg-[#0B0F19] hover:bg-slate-800 text-sky-300 border border-slate-800 shrink-0 transition-colors"
+                                    >
+                                      {checkingIpId === client.id ? 'يفحص...' : 'فحص IP'}
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRegenerateProxy(client)}
+                                      disabled={regeneratingId === client.id}
+                                      title="توليد جلسة Sticky جديدة وتفعيل IP جديد فوراً"
+                                      className={`h-7 px-2.5 rounded-lg text-[10px] font-bold flex items-center gap-1 shrink-0 border transition-all ${
+                                        justRegeneratedId === client.id
+                                          ? 'bg-emerald-600 border-emerald-400 text-white'
+                                          : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/70'
+                                      }`}
+                                    >
+                                      <RefreshCw
+                                        className={`w-3 h-3 ${
+                                          regeneratingId === client.id ? 'animate-spin' : ''
+                                        }`}
+                                      />
+                                      <span>
+                                        {regeneratingId === client.id
+                                          ? 'يولّد...'
+                                          : justRegeneratedId === client.id
+                                          ? 'تغيرت ✓'
+                                          : 'توليد جلسة'}
+                                      </span>
+                                    </button>
+                                  </div>
+
+                                  {verifiedIpMap[client.id]?.ok && verifiedIpMap[client.id]?.exit_ip && (
+                                    <div className="flex items-center justify-between gap-2 px-2 py-1 rounded-lg bg-emerald-950/40 border border-emerald-800/50 text-[10px]">
+                                      <span className="text-emerald-300 font-medium">
+                                        عنوان الـ IP الفعلي:
+                                      </span>
+                                      <span className="font-mono font-bold text-white" dir="ltr">
+                                        {verifiedIpMap[client.id].exit_ip} ·{' '}
+                                        <span className="text-emerald-400 font-normal">
+                                          {verifiedIpMap[client.id].city || countryInfo.code} (
+                                          {verifiedIpMap[client.id].isp || 'ISP'})
+                                        </span>
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </td>
 
                             {/* Column 5: Device Fingerprint Protection */}
@@ -2022,6 +2582,15 @@ export default function App() {
                 const boundDevice = client.registered_ip ? client.registered_ip.trim() : null;
                 const proxyDetails = parseProxyDetails(client);
 
+                const clientMode = client.service_mode || 'shamcash_sy';
+                const countryInfo = getCountryInfo(
+                  client.country_code || (clientMode === 'external_v2ray' ? 'AUTO' : 'SY')
+                );
+                const linkedExtSource = client.external_source_id
+                  ? externalSourceMap[client.external_source_id]
+                  : undefined;
+                const extUserinfo = linkedExtSource?.userinfo;
+
                 const quotaMb = client.quota_mb && client.quota_mb > 0 ? client.quota_mb : 0;
                 const usedMb = client.used_mb && client.used_mb >= 0 ? client.used_mb : 0;
                 const remainingMb =
@@ -2034,12 +2603,14 @@ export default function App() {
                     key={client.id}
                     className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-4 space-y-3"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="space-y-1.5 min-w-0">
                         <div className="font-mono font-bold text-base text-white" dir="ltr">
                           {client.username}
                         </div>
-                        <div className="mt-0.5 flex items-center gap-1.5 text-xs">
+                        {/* Required Clear Package Type & Country Badge on Mobile Card */}
+                        {renderPackageAndCountryBadge(client)}
+                        <div className="flex items-center gap-1.5 text-xs">
                           {statusInfo.status === 'active' && (
                             <span className="text-emerald-400 font-medium">نشط</span>
                           )}
@@ -2054,7 +2625,7 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 shrink-0">
                         <button
                           type="button"
                           onClick={() => handleOpenQrModal(client)}
@@ -2090,173 +2661,272 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Data Quota & Consumption Bar Underneath Mobile Subscriber Header */}
-                    <div className="bg-[#070A10] border border-slate-800/90 rounded-xl p-3 space-y-2">
-                      {quotaMb > 0 ? (
-                        <>
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="text-slate-400 flex items-center gap-1.5">
-                              <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
-                              <span>حصة المشترك ({proxyDetails.subUser || client.username}):</span>
-                            </span>
-                            <span className="font-mono font-bold text-slate-100" dir="ltr">
-                              {formatDataMb(usedMb)} / {formatDataMb(quotaMb)}
-                            </span>
-                          </div>
-                          <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${
-                                usagePct >= 90
-                                  ? 'bg-rose-500'
-                                  : usagePct >= 75
-                                  ? 'bg-amber-400'
-                                  : 'bg-emerald-500'
-                              }`}
-                              style={{ width: `${usagePct}%` }}
-                            />
-                          </div>
-                          <div className="flex items-center justify-between text-[11px] text-slate-400 pt-0.5">
-                            <span>
-                              المتبقي:{' '}
-                              <strong className="text-emerald-400 font-mono" dir="ltr">
-                                {formatDataMb(remainingMb)}
-                              </strong>
-                            </span>
-                            <span className="font-mono tabular-nums">{usagePct}%</span>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="flex items-center justify-between text-xs text-slate-400">
-                          <span className="flex items-center gap-1.5">
-                            <HardDrive className="w-3.5 h-3.5 text-sky-400" />
-                            <span>
-                              {!nodeMavenConnected
-                                ? `جاري جلب حصة (${proxyDetails.subUser || client.username})...`
-                                : proxyDetails.subUser &&
-                                  nodeMavenMap[proxyDetails.subUser.toLowerCase()]
-                                ? 'مفتوح (من الرصيد العام)'
-                                : `المعرف (${proxyDetails.subUser || client.username}) غير مسجل في الخادم`}
+                    {/* Data Quota / External V2Ray Userinfo Card on Mobile */}
+                    {clientMode === 'external_v2ray' ? (
+                      <div
+                        className={`bg-[#070A10] border rounded-xl p-3 space-y-2 ${
+                          extUserinfo?.near_limit ? 'border-amber-500/70' : 'border-violet-900/60'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between text-xs gap-2">
+                          <span className="text-violet-300 font-bold flex items-center gap-1.5 truncate">
+                            <Zap className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+                            <span className="truncate">
+                              {linkedExtSource?.name || 'رابط V2Ray خارجي مخصص'}
                             </span>
                           </span>
-                          <span className="text-[11px] font-mono text-amber-400">
-                            {!nodeMavenConnected
-                              ? '...'
-                              : proxyDetails.subUser &&
-                                nodeMavenMap[proxyDetails.subUser.toLowerCase()]
-                              ? '∞'
-                              : 'غير متوفر'}
+                          <span className="font-mono text-[11px] text-slate-300 shrink-0">
+                            {linkedExtSource?.server_count || 0} سيرفر
                           </span>
                         </div>
-                      )}
-
-                      {/* Mobile Refill Quota + Smart Domain Tracker Buttons */}
-                      <div className="grid grid-cols-2 gap-2 pt-1.5 border-t border-slate-800/80">
-                        <button
-                          type="button"
-                          onClick={() => handleRefillTraffic(client)}
-                          disabled={refillingId === client.id}
-                          className={`py-1.5 px-2.5 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1.5 border transition-colors ${
-                            justRefilledId === client.id
-                              ? 'bg-emerald-600 border-emerald-400 text-white'
-                              : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/60'
-                          }`}
-                        >
-                          <RotateCcw
-                            className={`w-3.5 h-3.5 ${
-                              refillingId === client.id ? 'animate-spin' : ''
-                            }`}
-                          />
-                          <span>
-                            {refillingId === client.id
-                              ? 'يعيد الملء...'
-                              : justRefilledId === client.id
-                              ? 'تم ملء الحصة ✓'
-                              : 'إعادة ملء الحصة'}
-                          </span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => openTrafficTracker(client)}
-                          className="py-1.5 px-2.5 rounded-lg text-[11px] font-bold bg-sky-950/70 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-800/60 flex items-center justify-center gap-1.5 transition-colors"
-                        >
-                          <Activity className="w-3.5 h-3.5" />
-                          <span>تتبع الصرف وحظر</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Mobile Proxy Name Display + Instant Regenerate Button */}
-                    <div
-                      className={`bg-[#070A10] border rounded-xl p-2.5 space-y-2 transition-colors ${
-                        justRegeneratedId === client.id
-                          ? 'border-emerald-500/90'
-                          : 'border-slate-800/90'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-medium text-slate-400 flex items-center gap-1.5">
-                          <Server className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>معرف جلسة البروكسي:</span>
-                        </span>
-                        <div className="flex items-center gap-1.5">
+                        {extUserinfo && extUserinfo.total_mb && extUserinfo.total_mb > 0 ? (
+                          <>
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="text-slate-400">استهلاك المصدر:</span>
+                              <span className="font-mono font-bold text-slate-100" dir="ltr">
+                                {formatDataMb(extUserinfo.used_mb || 0)} /{' '}
+                                {formatDataMb(extUserinfo.total_mb)}
+                              </span>
+                            </div>
+                            <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${
+                                  (extUserinfo.usage_pct || 0) >= 85
+                                    ? 'bg-rose-500'
+                                    : (extUserinfo.usage_pct || 0) >= 70
+                                    ? 'bg-amber-400'
+                                    : 'bg-violet-500'
+                                }`}
+                                style={{ width: `${Math.min(100, extUserinfo.usage_pct || 0)}%` }}
+                              />
+                            </div>
+                            {extUserinfo.near_limit && (
+                              <div className="text-[11px] text-amber-300 font-bold flex items-center gap-1">
+                                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                                <span>تنبيه: المصدر الخارجي اقترب من النفاد!</span>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <div className="text-[11px] text-slate-400">
+                            توزيع ديناميكي عبر {(linkedExtSource?.protocols || ['VLESS / Trojan']).join(' · ')}
+                          </div>
+                        )}
+                        <div className="grid grid-cols-2 gap-2 pt-1.5 border-t border-slate-800/80">
                           <button
                             type="button"
-                            onClick={() => handleCheckProxyIp(client)}
-                            disabled={checkingIpId === client.id || regeneratingId === client.id}
-                            className="px-2 py-1 rounded-lg text-[11px] font-semibold bg-[#0B0F19] text-sky-300 border border-slate-800"
-                          >
-                            {checkingIpId === client.id ? 'يفحص...' : 'فحص IP'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleRegenerateProxy(client)}
-                            disabled={regeneratingId === client.id}
-                            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 border transition-all ${
-                              justRegeneratedId === client.id
-                                ? 'bg-emerald-600 border-emerald-400 text-white'
-                                : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/70'
-                            }`}
+                            onClick={() =>
+                              linkedExtSource
+                                ? handleProbeClientExternalSource(linkedExtSource.id)
+                                : setExternalSourcesModalOpen(true)
+                            }
+                            disabled={
+                              Boolean(linkedExtSource) &&
+                              probingExternalId === linkedExtSource?.id
+                            }
+                            className="py-1.5 px-2.5 rounded-lg text-[11px] font-bold bg-violet-950/70 hover:bg-violet-600 text-violet-200 border border-violet-800/60 flex items-center justify-center gap-1.5"
                           >
                             <RefreshCw
-                              className={`w-3 h-3 ${
-                                regeneratingId === client.id ? 'animate-spin' : ''
+                              className={`w-3.5 h-3.5 ${
+                                linkedExtSource && probingExternalId === linkedExtSource.id
+                                  ? 'animate-spin'
+                                  : ''
                               }`}
                             />
-                            <span>
-                              {regeneratingId === client.id
-                                ? 'جاري التوليد...'
-                                : justRegeneratedId === client.id
-                                ? 'تغيرت الجلسة ✓'
-                                : 'إعادة توليد'}
-                            </span>
+                            <span>فحص الاستهلاك</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setExternalSourcesModalOpen(true)}
+                            className="py-1.5 px-2.5 rounded-lg text-[11px] font-bold bg-[#0E131F] text-slate-300 border border-slate-800 flex items-center justify-center gap-1.5"
+                          >
+                            <Zap className="w-3.5 h-3.5 text-violet-400" />
+                            <span>إدارة المصادر</span>
                           </button>
                         </div>
                       </div>
-                      <div
-                        className="bg-[#0B0F19] border border-slate-800/90 rounded-lg px-2.5 py-1.5 font-mono text-[11px] overflow-x-auto whitespace-nowrap"
-                        dir="ltr"
-                      >
-                        {renderProxyStringWithHighlightedSid(
-                          proxyDetails.fullProxyUsername,
-                          justRegeneratedId === client.id
-                        )}
-                      </div>
-                      {verifiedIpMap[client.id]?.ok && verifiedIpMap[client.id]?.exit_ip && (
-                        <div className="flex items-center justify-between gap-2 px-2.5 py-1 rounded-lg bg-emerald-950/40 border border-emerald-800/50 text-[11px]">
-                          <span className="text-emerald-300 font-medium">الـ IP الفعلي:</span>
-                          <span className="font-mono font-bold text-white" dir="ltr">
-                            {verifiedIpMap[client.id].exit_ip} ·{' '}
-                            <span className="text-emerald-400 font-normal">
-                              {verifiedIpMap[client.id].city || 'SY'} (
-                              {verifiedIpMap[client.id].isp || 'ISP'})
-                            </span>
-                          </span>
-                        </div>
-                      )}
-                    </div>
+                    ) : (
+                      <>
+                        {/* Data Quota & Consumption Bar Underneath Mobile Subscriber Header */}
+                        <div className="bg-[#070A10] border border-slate-800/90 rounded-xl p-3 space-y-2">
+                          {quotaMb > 0 ? (
+                            <>
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="text-slate-400 flex items-center gap-1.5">
+                                  <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
+                                  <span>حصة المشترك ({proxyDetails.subUser || client.username}):</span>
+                                </span>
+                                <span className="font-mono font-bold text-slate-100" dir="ltr">
+                                  {formatDataMb(usedMb)} / {formatDataMb(quotaMb)}
+                                </span>
+                              </div>
+                              <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full ${
+                                    usagePct >= 90
+                                      ? 'bg-rose-500'
+                                      : usagePct >= 75
+                                      ? 'bg-amber-400'
+                                      : 'bg-emerald-500'
+                                  }`}
+                                  style={{ width: `${usagePct}%` }}
+                                />
+                              </div>
+                              <div className="flex items-center justify-between text-[11px] text-slate-400 pt-0.5">
+                                <span>
+                                  المتبقي:{' '}
+                                  <strong className="text-emerald-400 font-mono" dir="ltr">
+                                    {formatDataMb(remainingMb)}
+                                  </strong>
+                                </span>
+                                <span className="font-mono tabular-nums">{usagePct}%</span>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="flex items-center justify-between text-xs text-slate-400">
+                              <span className="flex items-center gap-1.5">
+                                <HardDrive className="w-3.5 h-3.5 text-sky-400" />
+                                <span>
+                                  {client.proxy_provider === 'dataimpulse'
+                                    ? 'حصة DataImpulse (غير محددة)'
+                                    : !nodeMavenConnected
+                                    ? `جاري جلب حصة (${proxyDetails.subUser || client.username})...`
+                                    : proxyDetails.subUser &&
+                                      nodeMavenMap[proxyDetails.subUser.toLowerCase()]
+                                    ? 'مفتوح (من الرصيد العام)'
+                                    : `المعرف (${proxyDetails.subUser || client.username}) غير مسجل في الخادم`}
+                                </span>
+                              </span>
+                              <span className="text-[11px] font-mono text-amber-400">
+                                {client.proxy_provider === 'dataimpulse'
+                                  ? '∞'
+                                  : !nodeMavenConnected
+                                  ? '...'
+                                  : proxyDetails.subUser &&
+                                    nodeMavenMap[proxyDetails.subUser.toLowerCase()]
+                                  ? '∞'
+                                  : 'غير متوفر'}
+                              </span>
+                            </div>
+                          )}
 
-                    {/* Redesigned Mobile Info Grid (Expiry, Proxy, Device) */}
+                          {/* Mobile Refill Quota + Smart Domain Tracker Buttons */}
+                          <div className="grid grid-cols-2 gap-2 pt-1.5 border-t border-slate-800/80">
+                            <button
+                              type="button"
+                              onClick={() => handleRefillTraffic(client)}
+                              disabled={refillingId === client.id}
+                              className={`py-1.5 px-2.5 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1.5 border transition-colors ${
+                                justRefilledId === client.id
+                                  ? 'bg-emerald-600 border-emerald-400 text-white'
+                                  : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/60'
+                              }`}
+                            >
+                              <RotateCcw
+                                className={`w-3.5 h-3.5 ${
+                                  refillingId === client.id ? 'animate-spin' : ''
+                                }`}
+                              />
+                              <span>
+                                {refillingId === client.id
+                                  ? 'يعيد الملء...'
+                                  : justRefilledId === client.id
+                                  ? 'تم ملء الحصة ✓'
+                                  : 'إعادة ملء الحصة'}
+                              </span>
+                            </button>
+
+                            {clientMode === 'residential_custom' ? (
+                              <div className="py-1.5 px-2.5 rounded-lg text-[11px] font-bold bg-sky-950/40 text-sky-300 border border-sky-800/50 flex items-center justify-center gap-1.5">
+                                <Globe className="w-3.5 h-3.5 text-sky-400" />
+                                <span>تصفح مفتوح</span>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => openTrafficTracker(client)}
+                                className="py-1.5 px-2.5 rounded-lg text-[11px] font-bold bg-sky-950/70 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-800/60 flex items-center justify-center gap-1.5 transition-colors"
+                              >
+                                <Activity className="w-3.5 h-3.5" />
+                                <span>تتبع الصرف وحظر</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Mobile Proxy Name Display + Instant Regenerate Button */}
+                        <div
+                          className={`bg-[#070A10] border rounded-xl p-2.5 space-y-2 transition-colors ${
+                            justRegeneratedId === client.id
+                              ? 'border-emerald-500/90'
+                              : 'border-slate-800/90'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-medium text-slate-400 flex items-center gap-1.5">
+                              <Server className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>معرف جلسة البروكسي:</span>
+                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleCheckProxyIp(client)}
+                                disabled={checkingIpId === client.id || regeneratingId === client.id}
+                                className="px-2 py-1 rounded-lg text-[11px] font-semibold bg-[#0B0F19] text-sky-300 border border-slate-800"
+                              >
+                                {checkingIpId === client.id ? 'يفحص...' : 'فحص IP'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRegenerateProxy(client)}
+                                disabled={regeneratingId === client.id}
+                                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 border transition-all ${
+                                  justRegeneratedId === client.id
+                                    ? 'bg-emerald-600 border-emerald-400 text-white'
+                                    : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/70'
+                                }`}
+                              >
+                                <RefreshCw
+                                  className={`w-3 h-3 ${
+                                    regeneratingId === client.id ? 'animate-spin' : ''
+                                  }`}
+                                />
+                                <span>
+                                  {regeneratingId === client.id
+                                    ? 'جاري التوليد...'
+                                    : justRegeneratedId === client.id
+                                    ? 'تغيرت الجلسة ✓'
+                                    : 'إعادة توليد'}
+                                </span>
+                              </button>
+                            </div>
+                          </div>
+                          <div
+                            className="bg-[#0B0F19] border border-slate-800/90 rounded-lg px-2.5 py-1.5 font-mono text-[11px] overflow-x-auto whitespace-nowrap"
+                            dir="ltr"
+                          >
+                            {renderProxyStringWithHighlightedSid(
+                              proxyDetails.fullProxyUsername,
+                              justRegeneratedId === client.id
+                            )}
+                          </div>
+                          {verifiedIpMap[client.id]?.ok && verifiedIpMap[client.id]?.exit_ip && (
+                            <div className="flex items-center justify-between gap-2 px-2.5 py-1 rounded-lg bg-emerald-950/40 border border-emerald-800/50 text-[11px]">
+                              <span className="text-emerald-300 font-medium">الـ IP الفعلي:</span>
+                              <span className="font-mono font-bold text-white" dir="ltr">
+                                {verifiedIpMap[client.id].exit_ip} ·{' '}
+                                <span className="text-emerald-400 font-normal">
+                                  {verifiedIpMap[client.id].city || countryInfo.code} (
+                                  {verifiedIpMap[client.id].isp || 'ISP'})
+                                </span>
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    )}
+
+                    {/* Redesigned Mobile Info Grid (Expiry, Proxy/Country, Device) */}
                     <div className="grid grid-cols-3 gap-2 text-xs">
                       <div className="bg-[#070A10] border border-slate-800/80 rounded-xl p-2.5">
                         <span className="text-slate-500 text-[11px] block">الانتهاء</span>
@@ -2269,13 +2939,17 @@ export default function App() {
                       </div>
                       <div className="bg-[#070A10] border border-slate-800/80 rounded-xl p-2.5">
                         <span className="text-slate-500 text-[11px] block">
-                          الخادم {proxyDetails.subUser ? `(${proxyDetails.subUser})` : ''}
+                          {clientMode === 'external_v2ray'
+                            ? 'الدولة / المصدر'
+                            : `الخادم ${proxyDetails.subUser ? `(${proxyDetails.subUser})` : ''}`}
                         </span>
                         <span
                           className="font-mono font-semibold tabular-nums text-slate-100 mt-0.5 block truncate"
                           dir="ltr"
                         >
-                          {proxyDetails.cleanHost}:{client.proxy_port}
+                          {clientMode === 'external_v2ray'
+                            ? `${countryInfo.flag} ${countryInfo.code}`
+                            : `${proxyDetails.cleanHost}:${client.proxy_port}`}
                         </span>
                       </div>
                       <div className="bg-[#070A10] border border-slate-800/80 rounded-xl p-2.5">
@@ -2700,12 +3374,25 @@ export default function App() {
         mode={modalMode}
         initialClient={editingClient}
         existingUsernames={clients.map((c) => c.username)}
+        externalSources={externalSources}
         defaultProxyHost={defaultHost}
         defaultProxyPort={defaultPort}
         defaultProxyUsername={clients[0]?.proxy_username || ''}
         defaultProxyPassword={clients[0]?.proxy_password || ''}
         onClose={() => setModalOpen(false)}
+        onOpenExternalSources={() => setExternalSourcesModalOpen(true)}
         onSubmit={handleSaveClient}
+      />
+
+      {/* External V2Ray Sources Manager Modal */}
+      <ExternalV2RaySourcesModal
+        isOpen={externalSourcesModalOpen}
+        sources={externalSources}
+        allClients={clients}
+        onClose={() => setExternalSourcesModalOpen(false)}
+        onSourcesChange={setExternalSources}
+        onRefreshAll={() => syncExternalSources(true)}
+        onShowToast={showToast}
       />
 
       {/* QR Code Modal */}
