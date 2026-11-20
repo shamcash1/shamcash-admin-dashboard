@@ -582,12 +582,15 @@ export async function createNodeMavenSubUserLive(params: {
   full_proxy_username?: string;
   proxy_password?: string;
   session_id?: string;
+  country_code?: string;
   quota_mb?: number;
   live_check?: {
     ok: boolean;
     exit_ip?: string;
     city?: string;
+    region?: string;
     isp?: string;
+    country_code?: string;
   };
   error?: string;
 }> {

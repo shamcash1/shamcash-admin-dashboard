@@ -49,9 +49,6 @@ import {
   regenerateNodeMavenProxyUsername,
   regenerateProxyUsernameForMode,
   buildCustomerActivationMessage,
-  generateSubscriberWithPrefix,
-  previewNextNodeMavenSubUserName,
-  createNodeMavenSubUserLive,
   fetchExternalV2RaySources,
   probeExternalV2RaySourceApi,
   getQrCodeImageUrl,
@@ -63,6 +60,7 @@ import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { QrCodeModal, copyToClipboardSync, shareQrAndMessage } from './components/QrCodeModal';
 import { SmartTrafficTrackerModal } from './components/SmartTrafficTrackerModal';
 import { ExternalV2RaySourcesModal } from './components/ExternalV2RaySourcesModal';
+import { AutoGenerateModal, VerifiedIpResult } from './components/AutoGenerateModal';
 import { usePWAInstall } from './hooks/usePWAInstall';
 
 const LOCAL_DELTA_STORAGE_KEY = 'shamcash_admin_local_delta_v1';
@@ -162,27 +160,8 @@ export default function App() {
     null
   );
 
-  // Auto-generate subscriber modal state (Creates brand-new Sub-User in NodeMaven Parent Dashboard + Subscriber in Our Dashboard)
+  // Auto-generate subscriber modal state (Supports ShamCash SY, Custom Residential Proxy, and External V2Ray VPN)
   const [autoGenModalOpen, setAutoGenModalOpen] = useState<boolean>(false);
-  const [nmProxyPrefix, setNmProxyPrefix] = useState<string>(() => {
-    try {
-      return localStorage.getItem('shamcash_NmProxyPrefix_v1') || 'Ammarmedia';
-    } catch {
-      return 'Ammarmedia';
-    }
-  });
-  const [customSubscriberName, setCustomSubscriberName] = useState<string>('');
-  const [subscriberPrefix, setSubscriberPrefix] = useState<string>(() => {
-    try {
-      return localStorage.getItem('shamcash_PreferredPrefix_v1') || 'alishop';
-    } catch {
-      return 'alishop';
-    }
-  });
-  const [autoGenQuotaMb, setAutoGenQuotaMb] = useState<string>('50');
-  const [autoGenDays, setAutoGenDays] = useState<number>(30);
-  const [autoGenerating, setAutoGenerating] = useState<boolean>(false);
-  const [autoGenError, setAutoGenError] = useState<string | null>(null);
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -592,126 +571,16 @@ export default function App() {
     return Array.from(names);
   }, [nodeMavenMap, clients]);
 
-  const previewNodeMavenSubUser = useMemo(() => {
-    return previewNextNodeMavenSubUserName(nmProxyPrefix, existingNodeMavenSubUserNames);
-  }, [nmProxyPrefix, existingNodeMavenSubUserNames]);
-
   // Open Auto-Generate Subscriber Modal
   const openAutoGenModal = () => {
-    setAutoGenError(null);
-    const nextSubName = generateSubscriberWithPrefix(
-      subscriberPrefix,
-      clients.map((c) => c.username)
-    );
-    setCustomSubscriberName(nextSubName);
-    setAutoGenDays(30);
-    setAutoGenQuotaMb('50');
     setAutoGenModalOpen(true);
   };
 
-  // Update NodeMaven parent proxy prefix
-  const handleNmProxyPrefixChange = (nextVal: string) => {
-    setNmProxyPrefix(nextVal);
-    try {
-      localStorage.setItem('shamcash_NmProxyPrefix_v1', nextVal.trim() || 'Ammarmedia');
-    } catch {
-      // ignore
-    }
-  };
-
-  // Update local subscriber prefix & regenerate subscriber name
-  const handleSubscriberPrefixGenerate = (prefixToUse: string) => {
-    setSubscriberPrefix(prefixToUse);
-    try {
-      localStorage.setItem('shamcash_PreferredPrefix_v1', prefixToUse.trim() || 'alishop');
-    } catch {
-      // ignore
-    }
-    const generated = generateSubscriberWithPrefix(
-      prefixToUse,
-      clients.map((c) => c.username)
-    );
-    setCustomSubscriberName(generated);
-  };
-
-  // Confirm Auto-Generate:
-  // 1. Creates a brand-new Sub-User from scratch in the Parent NodeMaven Dashboard via API (POST /api/v2/base/sub-users/)
-  // 2. Configures its Syrian sticky session (-country-sy-sid-...-filter-medium-norotate-true)
-  // 3. Adds the subscriber with the chosen subscriber name into our Dashboard (Supabase)
-  const handleConfirmAutoGenerateSubscriber = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (autoGenerating) return;
-    setAutoGenError(null);
-
-    const trimmedSubName = customSubscriberName.trim().replace(/\s+/g, '_');
-    if (!trimmedSubName) {
-      setAutoGenError('يرجى إدخال أو توليد اسم المشترك الذي سيضاف في لوحتك.');
-      return;
-    }
-
-    if (!/^[a-zA-Z0-9_.-]+$/.test(trimmedSubName)) {
-      setAutoGenError('اسم المشترك يقبل أحرف إنجليزية وأرقام فقط.');
-      return;
-    }
-
-    const isDuplicate = clients.some(
-      (c) => c.username.toLowerCase() === trimmedSubName.toLowerCase()
-    );
-    if (isDuplicate) {
-      setAutoGenError('اسم المشترك موجود مسبقاً في لوحتك، يرجى تغييره أو الضغط على توليد رقم جديد.');
-      return;
-    }
-
-    setAutoGenerating(true);
-
-    try {
-      const host = clients[0]?.proxy_host || 'gate.nodemaven.com';
-      const port = clients[0]?.proxy_port || 1080;
-      const requestedQuotaMb = Math.max(0, Number(autoGenQuotaMb) || 50);
-
-      // Call backend to create a brand-new Sub-User from scratch in the master server
-      const nmCreated = await createNodeMavenSubUserLive({
-        proxy_prefix: previewNodeMavenSubUser,
-        quota_mb: requestedQuotaMb,
-        proxy_host: host,
-      });
-
-      if (!nmCreated.success || !nmCreated.full_proxy_username || !nmCreated.proxy_password) {
-        setAutoGenError(
-          nmCreated.error || 'تعذر إنشاء يوزر البروكسي الجديد في الخادم الرئيسي.'
-        );
-        return;
-      }
-
-      const expiryDate = addDaysToDateString(null, autoGenDays);
-
-      await handleSaveClient({
-        username: trimmedSubName,
-        is_active: true,
-        expiry_date: expiryDate,
-        proxy_host: host,
-        proxy_port: port,
-        proxy_username: nmCreated.full_proxy_username,
-        proxy_password: nmCreated.proxy_password,
-        quota_mb: nmCreated.quota_mb ?? requestedQuotaMb,
-        used_mb: 0,
-      });
-
-      await syncNodeMavenUsage();
-      setAutoGenModalOpen(false);
-      showToast(
-        `تم إنشاء البروكسي (${nmCreated.sub_user}) في الخادم الرئيسي وإضافة المشترك (${trimmedSubName}) بنجاح!`
-      );
-    } finally {
-      setAutoGenerating(false);
-    }
-  };
-
-  // Save Client (Add / Edit Modal)
+  // Save Client (Add / Edit Modal & Auto-Generate Modal)
   const handleSaveClient = async (
     clientData: Omit<ProxyClient, 'id' | 'created_at' | 'updated_at'>,
     id?: string
-  ) => {
+  ): Promise<ProxyClient | null> => {
     const packedHost = packProxyHostWithAuth(
       clientData.proxy_host,
       clientData.proxy_username,
@@ -734,7 +603,7 @@ export default function App() {
       proxy_port: clientData.proxy_port,
     };
 
-    if (modalMode === 'add') {
+    if (!id) {
       const { data, error } = await supabase
         .from('proxy_clients')
         .insert([{ ...dbPayload, registered_ip: null }])
@@ -745,7 +614,7 @@ export default function App() {
         setRemoteClients((prev) => [created, ...prev]);
         syncNodeMavenUsage();
         showToast(`تمت إضافة ${created.username}`);
-        return;
+        return created;
       }
 
       const fallbackClient: ProxyClient = {
@@ -762,7 +631,8 @@ export default function App() {
       setLocalDelta(nextDelta);
       saveLocalDelta(nextDelta);
       showToast(`تمت إضافة ${fallbackClient.username}`);
-    } else if (modalMode === 'edit' && id) {
+      return fallbackClient;
+    } else {
       const { data, error } = await supabase
         .from('proxy_clients')
         .update({
@@ -784,7 +654,7 @@ export default function App() {
         }
         syncNodeMavenUsage();
         showToast(`تم تحديث ${updated.username}`);
-        return;
+        return updated;
       }
 
       const existing = clients.find((c) => c.id === id);
@@ -802,6 +672,21 @@ export default function App() {
       setLocalDelta(nextDelta);
       saveLocalDelta(nextDelta);
       showToast(`تم تحديث ${updatedFallback.username}`);
+      return updatedFallback;
+    }
+  };
+
+  // Wrapper for AutoGenerateModal to persist subscriber + record live verified exit IP immediately
+  const handleAutoGenerateCreateClient = async (
+    clientData: Omit<ProxyClient, 'id' | 'created_at' | 'updated_at'>,
+    verifiedIp?: VerifiedIpResult
+  ) => {
+    const created = await handleSaveClient(clientData);
+    if (created && verifiedIp?.ok && verifiedIp.exit_ip) {
+      setVerifiedIpMap((prev) => ({
+        ...prev,
+        [created.id]: verifiedIp,
+      }));
     }
   };
 
@@ -1581,7 +1466,7 @@ export default function App() {
               type="button"
               onClick={openAutoGenModal}
               className="h-8 sm:h-9 px-2.5 sm:px-3.5 text-[11px] sm:text-xs font-bold text-amber-300 hover:text-white bg-amber-950/70 hover:bg-amber-600 border border-amber-700/70 rounded-lg sm:rounded-xl transition-colors flex items-center gap-1 sm:gap-1.5 whitespace-nowrap shrink-0"
-              title="توليد مشترك وبروكسي سوري جديد تلقائياً"
+              title="التوليد التلقائي السريع للمشتركين (شام كاش / بروكسي منزلي / VPN عام V2Ray)"
             >
               <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400 shrink-0" />
               <span>توليد تلقائي</span>
@@ -3126,239 +3011,19 @@ export default function App() {
         </div>
       )}
 
-      {/* Auto-Generate Subscriber Modal: Creates Brand-New Sub-User in Master Server + Subscriber in Local Dashboard */}
-      {autoGenModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs overflow-y-auto"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="w-full max-w-lg bg-[#0E131F] border border-slate-800/90 rounded-2xl shadow-2xl overflow-hidden my-auto">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800/80">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-amber-400" />
-                <h2 className="text-sm font-bold text-white">
-                  توليد بروكسي سوري جديد في الخادم الرئيسي + إضافة مشترك
-                </h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAutoGenModalOpen(false)}
-                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800/80 rounded-lg transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleConfirmAutoGenerateSubscriber} className="p-6 space-y-4">
-              {autoGenError && (
-                <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-800/60 text-rose-300 text-xs">
-                  {autoGenError}
-                </div>
-              )}
-
-              {/* 1. Master Server Proxy Prefix */}
-              <div className="p-4 rounded-xl bg-[#070A10] border border-amber-800/50 space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
-                    <Server className="w-3.5 h-3.5 text-amber-400" />
-                    <span>1. بادئة معرف البروكسي الذي سيُنشأ في الخادم الرئيسي</span>
-                  </label>
-                  <span className="text-[10px] font-mono text-slate-400" dir="ltr">
-                    ≥ 9 chars
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={nmProxyPrefix}
-                    onChange={(e) => handleNmProxyPrefixChange(e.target.value)}
-                    placeholder="Ammarmedia أو Alishop"
-                    dir="ltr"
-                    className="flex-1 bg-[#0E131F] border border-slate-800 focus:border-amber-500 rounded-xl px-3.5 py-2 text-sm font-mono font-bold text-white placeholder-slate-600 focus:outline-none transition-colors"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => handleNmProxyPrefixChange('Ammarmedia')}
-                    className="px-2.5 py-2 rounded-xl bg-[#0E131F] hover:bg-slate-800 border border-slate-800 text-[11px] font-mono text-slate-300"
-                    dir="ltr"
-                  >
-                    Ammarmedia
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleNmProxyPrefixChange('Alishop')}
-                    className="px-2.5 py-2 rounded-xl bg-[#0E131F] hover:bg-slate-800 border border-slate-800 text-[11px] font-mono text-amber-300"
-                    dir="ltr"
-                  >
-                    Alishop
-                  </button>
-                </div>
-
-                <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-xs">
-                  <span className="text-slate-400">المعرف الفرعي الجديد في الخادم الرئيسي:</span>
-                  <span
-                    className="font-mono text-sm font-extrabold text-amber-400 bg-amber-950/40 border border-amber-700/50 px-2.5 py-0.5 rounded-lg"
-                    dir="ltr"
-                  >
-                    {previewNodeMavenSubUser}
-                  </span>
-                </div>
-
-                <div
-                  className="text-[11px] font-mono text-slate-400 bg-[#0B0F19] border border-slate-800/80 rounded-lg px-2.5 py-1.5 overflow-x-auto whitespace-nowrap"
-                  dir="ltr"
-                >
-                  <span className="text-amber-300 font-bold">{previewNodeMavenSubUser}</span>
-                  <span className="text-slate-400">
-                    -country-sy-sid-xxxxxxxxxxxxx-filter-medium-norotate-true
-                  </span>
-                </div>
-              </div>
-
-              {/* 2. Subscriber Name in Our Local Dashboard */}
-              <div className="p-4 rounded-xl bg-[#070A10] border border-emerald-800/50 space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-emerald-300">
-                    2. اسم المشترك الذي سيُضاف لديك في اللوحة
-                  </label>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setCustomSubscriberName(previewNodeMavenSubUser)}
-                      className="px-2 py-0.5 rounded bg-emerald-950/70 hover:bg-emerald-800 text-[11px] font-semibold text-emerald-300 border border-emerald-700/60"
-                    >
-                      مطابقة مع اسم البروكسي
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleSubscriberPrefixGenerate(subscriberPrefix)}
-                      className="px-2 py-0.5 rounded bg-[#0E131F] hover:bg-slate-800 text-[11px] font-semibold text-sky-300 border border-slate-700 flex items-center gap-1"
-                    >
-                      <RefreshCw className="w-3 h-3" />
-                      <span>توليد رقم تالي</span>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-2">
-                  <div className="col-span-2">
-                    <span className="block text-[11px] text-slate-400 mb-1">
-                      الاسم النهائي للمشترك في لوحتك:
-                    </span>
-                    <input
-                      type="text"
-                      value={customSubscriberName}
-                      onChange={(e) => setCustomSubscriberName(e.target.value)}
-                      placeholder="alishop1 أو اسم الزبون"
-                      dir="ltr"
-                      className="w-full bg-[#0E131F] border border-slate-800 focus:border-emerald-500 rounded-xl px-3.5 py-2 text-sm font-mono font-bold text-white placeholder-slate-600 focus:outline-none transition-colors"
-                    />
-                  </div>
-                  <div>
-                    <span className="block text-[11px] text-slate-400 mb-1">
-                      بادئة التوليد السريع:
-                    </span>
-                    <input
-                      type="text"
-                      value={subscriberPrefix}
-                      onChange={(e) => handleSubscriberPrefixGenerate(e.target.value)}
-                      placeholder="alishop"
-                      dir="ltr"
-                      className="w-full bg-[#0E131F] border border-slate-800 focus:border-sky-500 rounded-xl px-2.5 py-2 text-xs font-mono text-sky-300 placeholder-slate-600 focus:outline-none transition-colors"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* 3. Quota MB & Subscription Duration */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                    حصة البيانات المخصصة للمشترك (MB)
-                  </label>
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      type="number"
-                      min={1}
-                      value={autoGenQuotaMb}
-                      onChange={(e) => setAutoGenQuotaMb(e.target.value)}
-                      dir="ltr"
-                      className="w-20 bg-[#070A10] border border-slate-800 focus:border-emerald-500 rounded-xl px-2.5 py-2 text-xs font-mono font-bold text-white focus:outline-none"
-                    />
-                    {[50, 100, 500].map((mb) => (
-                      <button
-                        key={mb}
-                        type="button"
-                        onClick={() => setAutoGenQuotaMb(String(mb))}
-                        className={`px-2 py-2 rounded-xl text-[11px] font-mono font-semibold border transition-colors ${
-                          Number(autoGenQuotaMb) === mb
-                            ? 'bg-emerald-950/70 border-emerald-600 text-emerald-300'
-                            : 'bg-[#070A10] border-slate-800 text-slate-400 hover:text-white'
-                        }`}
-                        dir="ltr"
-                      >
-                        {mb}MB
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                    مدة صلاحية الاشتراك
-                  </label>
-                  <div className="grid grid-cols-4 gap-1.5">
-                    {[
-                      { label: '7ي', days: 7 },
-                      { label: '30ي', days: 30 },
-                      { label: '90ي', days: 90 },
-                      { label: 'سنة', days: 365 },
-                    ].map((preset) => (
-                      <button
-                        key={preset.days}
-                        type="button"
-                        onClick={() => setAutoGenDays(preset.days)}
-                        className={`py-2 px-1.5 rounded-xl text-xs font-semibold border transition-colors ${
-                          autoGenDays === preset.days
-                            ? 'bg-emerald-950/70 border-emerald-600 text-emerald-300'
-                            : 'bg-[#070A10] border-slate-800 text-slate-400 hover:text-slate-200'
-                        }`}
-                      >
-                        {preset.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Actions */}
-              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-800/80">
-                <button
-                  type="button"
-                  onClick={() => setAutoGenModalOpen(false)}
-                  className="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white bg-slate-800/70 hover:bg-slate-800 rounded-xl transition-colors"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  disabled={autoGenerating}
-                  className="px-5 py-2.5 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl transition-colors flex items-center gap-1.5 disabled:opacity-50"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>
-                    {autoGenerating
-                      ? 'جاري الإنشاء والمزامنة...'
-                      : 'إنشاء البروكسي في الخادم الرئيسي + إضافة المشترك'}
-                  </span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Auto-Generate Subscriber Modal (Supports ShamCash SY, Custom Residential Proxy, and External V2Ray VPN) */}
+      <AutoGenerateModal
+        isOpen={autoGenModalOpen}
+        onClose={() => setAutoGenModalOpen(false)}
+        clients={clients}
+        existingNodeMavenSubUserNames={existingNodeMavenSubUserNames}
+        externalSources={externalSources}
+        initialMode={modeFilter === 'all' ? 'shamcash_sy' : modeFilter}
+        onOpenExternalSources={() => setExternalSourcesModalOpen(true)}
+        onCreateClient={handleAutoGenerateCreateClient}
+        onSyncUsage={syncNodeMavenUsage}
+        onToast={showToast}
+      />
 
       {/* Toast Notification */}
       {toastMessage && (
@@ -3381,7 +3046,9 @@ export default function App() {
         defaultProxyPassword={clients[0]?.proxy_password || ''}
         onClose={() => setModalOpen(false)}
         onOpenExternalSources={() => setExternalSourcesModalOpen(true)}
-        onSubmit={handleSaveClient}
+        onSubmit={async (data, id) => {
+          await handleSaveClient(data, id);
+        }}
       />
 
       {/* External V2Ray Sources Manager Modal */}
