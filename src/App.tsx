@@ -1301,11 +1301,11 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#070A10] text-slate-100 flex flex-col" dir="rtl">
-      {/* Top Corporate Header: Clean 2-Row Layout on Mobile, Symmetrical 3-Zone Enterprise Navbar on Desktop */}
-      <header className="sticky top-0 z-40 w-full border-b border-slate-800/80 bg-[#070A10]/95 backdrop-blur-md">
-        <div className="max-w-[1440px] mx-auto px-3 sm:px-6 py-2.5 sm:py-0 sm:h-[68px] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
-          {/* Top Row on Mobile / Zone 1 on Desktop: Brand Identity + Mobile Refresh */}
-          <div className="flex items-center justify-between gap-2 min-w-0">
+      {/* Top Corporate Header: Compact Unified Single Bar on Mobile (<768px), Symmetrical 3-Zone Enterprise Navbar on Desktop (>=768px) */}
+      <header className="sticky top-0 z-40 w-full border-b border-slate-800/80 bg-[#070A10]/90 backdrop-blur-md">
+        <div className="max-w-[1440px] mx-auto px-3 md:px-6 h-13 md:h-[68px] flex items-center justify-between gap-2 md:gap-4">
+          {/* Zone 1: Corporate Brand Identity (+ Compact Mobile Refresh on <768px) */}
+          <div className="flex items-center justify-between gap-2 w-full md:w-auto min-w-0">
             <a
               href="#top"
               onClick={(e) => {
@@ -1313,10 +1313,10 @@ export default function App() {
                 setStatusFilter('all');
                 setModeFilter('all');
               }}
-              className="flex items-center gap-2.5 sm:gap-3 whitespace-nowrap shrink-0 min-w-0"
+              className="flex items-center gap-2 md:gap-3 whitespace-nowrap shrink-0 min-w-0"
             >
               <svg
-                className="w-8 h-8 sm:w-9 sm:h-9 shrink-0"
+                className="w-7 h-7 md:w-9 md:h-9 shrink-0"
                 viewBox="0 0 40 40"
                 fill="none"
                 xmlns="http://www.w3.org/2000/svg"
@@ -1345,48 +1345,28 @@ export default function App() {
                   strokeLinejoin="round"
                 />
               </svg>
-              <div className="flex flex-col min-w-0">
-                <span className="text-sm sm:text-base font-extrabold tracking-wide sm:tracking-wider text-white font-mono truncate">
+              <div className="flex flex-col min-w-0 leading-tight">
+                <span className="text-[13px] md:text-base font-extrabold tracking-wide md:tracking-wider text-white font-mono truncate">
                   VPN ALISHOP
                 </span>
-                <span className="text-[10px] text-slate-400 font-medium truncate">
+                <span className="text-[9.5px] md:text-[10px] text-slate-400 font-medium truncate">
                   إدارة اشتراكات شام كاش والبروكسي و VPN
                 </span>
               </div>
             </a>
 
-            {/* Mobile-only compact Sync button on top-left */}
+            {/* Mobile-only (<768px) Unified Compact Refresh Action */}
             <button
               type="button"
               onClick={() => fetchClients(true)}
               disabled={refreshing}
-              className="sm:hidden h-8 px-2.5 rounded-lg bg-[#0E131F] hover:bg-slate-800/80 border border-slate-800 text-slate-300 hover:text-white transition-colors flex items-center gap-1.5 text-[11px] font-semibold shrink-0"
+              className="md:hidden h-8 px-2.5 rounded-lg bg-[#0E131F]/80 hover:bg-slate-800/80 border border-slate-800/90 text-slate-200 hover:text-white transition-colors flex items-center gap-1.5 text-[11px] font-semibold whitespace-nowrap shrink-0"
               title="مزامنة وتحديث البيانات"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin text-emerald-400' : 'text-emerald-400'}`} />
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin text-emerald-400' : 'text-emerald-400'}`}
+              />
               <span>تحديث</span>
-            </button>
-          </div>
-
-          {/* Mobile-only Primary Actions Row (Symmetrical 2 Equal Full-Width Buttons) */}
-          <div className="grid grid-cols-2 gap-2 sm:hidden">
-            <button
-              type="button"
-              onClick={openAutoGenModal}
-              className="h-9 px-3 text-xs font-bold text-amber-300 hover:text-white bg-amber-950/75 hover:bg-amber-600 border border-amber-700/70 rounded-xl transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap"
-              title="التوليد التلقائي السريع للمشتركين (شام كاش / بروكسي منزلي / VPN عام V2Ray)"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span>توليد تلقائي</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={openAddModal}
-              className="h-9 px-3 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap shadow-sm shadow-emerald-950"
-            >
-              <Plus className="w-3.5 h-3.5 shrink-0" />
-              <span>مشترك جديد</span>
             </button>
           </div>
 
@@ -1467,8 +1447,8 @@ export default function App() {
             </button>
           </div>
 
-          {/* Zone 3: Primary Action Toolbar (Tablet & Desktop sm+) */}
-          <div className="hidden sm:flex items-center gap-2 shrink-0">
+          {/* Zone 3: Primary Action Toolbar (Tablet & Desktop md+ >=768px — Untouched) */}
+          <div className="hidden md:flex items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={() => setExternalSourcesModalOpen(true)}
@@ -1527,9 +1507,91 @@ export default function App() {
       </header>
 
       {/* Main Workspace */}
-      <main className="flex-1 max-w-[1440px] w-full mx-auto px-3 sm:px-6 py-3.5 sm:py-6 space-y-3.5 sm:space-y-5">
-        {/* Mobile & Tablet Quick Tools Card (Symmetrical 2-Column Grid, Zero Crowding) */}
-        <section className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-2.5 space-y-2 lg:hidden">
+      <main className="flex-1 max-w-[1440px] w-full mx-auto px-3 md:px-6 pt-2.5 pb-4 md:py-6 space-y-2.5 md:space-y-5">
+        {/* Mobile-Only (<768px) Top Action Hierarchy: Prominent 2-Col Primary Actions + Compact Glassmorphic Secondary Tools */}
+        <section className="md:hidden space-y-2">
+          {/* 1. Primary Actions Row (Clear Visual Prominence) */}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={openAddModal}
+              className="h-10 px-3 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] rounded-xl transition-all flex items-center justify-center gap-1.5 whitespace-nowrap shadow-md shadow-emerald-950/70 border border-emerald-500/40"
+            >
+              <Plus className="w-4 h-4 shrink-0" />
+              <span>مشترك جديد</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={openAutoGenModal}
+              className="h-10 px-3 text-xs font-bold text-amber-200 hover:text-white bg-amber-950/80 hover:bg-amber-600 active:scale-[0.99] border border-amber-600/60 rounded-xl transition-all flex items-center justify-center gap-1.5 whitespace-nowrap shadow-md shadow-amber-950/40"
+              title="التوليد التلقائي السريع للمشتركين (شام كاش / بروكسي منزلي / VPN عام V2Ray)"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span>توليد تلقائي</span>
+            </button>
+          </div>
+
+          {/* 2. Secondary Tools Glassmorphic Container (Lighter Visual Weight & Compact Height) */}
+          <div className="bg-[#0E131F]/65 backdrop-blur-md border border-slate-800/75 rounded-xl p-1.5 space-y-1.5">
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                onClick={() => setExternalSourcesModalOpen(true)}
+                className="h-8 px-2 rounded-lg text-[11px] font-medium bg-violet-950/35 hover:bg-violet-900/50 border border-violet-800/45 text-violet-200/90 flex items-center justify-center gap-1.5 whitespace-nowrap min-w-0 transition-colors"
+              >
+                <Zap className="w-3 h-3 text-violet-400 shrink-0" />
+                <span className="truncate">مصادر V2Ray</span>
+                {nearLimitExternalSources.length > 0 && (
+                  <span className="px-1 py-0.5 rounded bg-amber-500 text-slate-950 text-[9px] font-extrabold font-mono leading-none shrink-0">
+                    {nearLimitExternalSources.length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openTrafficTracker(null)}
+                className="h-8 px-2 rounded-lg text-[11px] font-medium bg-sky-950/35 hover:bg-sky-900/50 border border-sky-800/45 text-sky-200/90 flex items-center justify-center gap-1.5 whitespace-nowrap min-w-0 transition-colors"
+              >
+                <Activity className="w-3 h-3 text-sky-400 shrink-0" />
+                <span className="truncate">رادار الصرف والحظر</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCopyAndroidLink}
+                className="h-8 px-2 rounded-lg text-[11px] font-medium bg-[#070A10]/70 hover:bg-slate-800/70 border border-slate-800/70 text-slate-300 flex items-center justify-center gap-1.5 whitespace-nowrap min-w-0 transition-colors"
+              >
+                <Download className="w-3 h-3 text-emerald-400 shrink-0" />
+                <span className="truncate">{copiedAndroidApp ? 'تم نسخ أندرويد' : 'تطبيق أندرويد'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCopyIosLink}
+                className="h-8 px-2 rounded-lg text-[11px] font-medium bg-[#070A10]/70 hover:bg-slate-800/70 border border-slate-800/70 text-slate-300 flex items-center justify-center gap-1.5 whitespace-nowrap min-w-0 transition-colors"
+              >
+                <Smartphone className="w-3 h-3 text-sky-400 shrink-0" />
+                <span className="truncate">{copiedIosApp ? 'تم نسخ آيفون' : 'تطبيق آيفون'}</span>
+              </button>
+            </div>
+
+            {!isInstalled && (
+              <button
+                type="button"
+                onClick={promptInstall}
+                className="w-full h-7 px-2.5 rounded-lg text-[10.5px] font-medium bg-emerald-950/35 hover:bg-emerald-900/45 border border-emerald-800/45 text-emerald-300/90 flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors"
+              >
+                <Smartphone className="w-3 h-3 text-emerald-400 shrink-0" />
+                <span>تثبيت لوحة التحكم كتطبيق على الهاتف</span>
+              </button>
+            )}
+          </div>
+        </section>
+
+        {/* Tablet Quick Tools Card (768px–1023px Only — Preserved Unchanged) */}
+        <section className="hidden md:block lg:hidden bg-[#0E131F] border border-slate-800/80 rounded-2xl p-2.5 space-y-2">
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
