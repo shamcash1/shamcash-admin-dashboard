@@ -845,6 +845,11 @@ export default function App() {
               proxy_password: client.proxy_password,
               proxy_host: client.proxy_host,
               quota_mb: quotaToRefill,
+              service_mode: client.service_mode || 'shamcash_sy',
+              proxy_provider: client.proxy_provider || 'nodemaven',
+              country_code: client.country_code || 'SY',
+              external_source_id: client.external_source_id || null,
+              external_custom_url: client.external_custom_url || null,
             }),
           });
           if (!res.ok) continue;
@@ -1296,59 +1301,96 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#070A10] text-slate-100 flex flex-col" dir="rtl">
-      {/* Top Corporate Header: Responsive on Mobile, Symmetrical 3-Zone Enterprise Navbar on Desktop */}
+      {/* Top Corporate Header: Clean 2-Row Layout on Mobile, Symmetrical 3-Zone Enterprise Navbar on Desktop */}
       <header className="sticky top-0 z-40 w-full border-b border-slate-800/80 bg-[#070A10]/95 backdrop-blur-md">
-        <div className="max-w-[1440px] mx-auto px-2.5 sm:px-6 min-h-14 sm:h-[68px] py-2 sm:py-0 flex items-center justify-between gap-2 sm:gap-4">
-          {/* Zone 1: Corporate Brand Identity */}
-          <a
-            href="#top"
-            onClick={(e) => {
-              e.preventDefault();
-              setStatusFilter('all');
-            }}
-            className="flex items-center gap-2 sm:gap-3 whitespace-nowrap shrink-0 min-w-0"
-          >
-            <svg
-              className="w-7 h-7 sm:w-9 sm:h-9 shrink-0"
-              viewBox="0 0 40 40"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-              aria-hidden="true"
+        <div className="max-w-[1440px] mx-auto px-3 sm:px-6 py-2.5 sm:py-0 sm:h-[68px] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
+          {/* Top Row on Mobile / Zone 1 on Desktop: Brand Identity + Mobile Refresh */}
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <a
+              href="#top"
+              onClick={(e) => {
+                e.preventDefault();
+                setStatusFilter('all');
+                setModeFilter('all');
+              }}
+              className="flex items-center gap-2.5 sm:gap-3 whitespace-nowrap shrink-0 min-w-0"
             >
-              <rect
-                x="1"
-                y="1"
-                width="38"
-                height="38"
-                rx="10"
-                className="fill-emerald-950 stroke-emerald-500/60"
-                strokeWidth="1.5"
-              />
-              <path
-                d="M20 7L30 11.5V19.5C30 26.2 25.7 31.8 20 33.5C14.3 31.8 10 26.2 10 19.5V11.5L20 7Z"
-                className="fill-emerald-500/20 stroke-emerald-400"
-                strokeWidth="1.8"
-                strokeLinejoin="round"
-              />
-              <path
-                d="M16.5 23L20 14L23.5 23M17.8 20.5H22.2"
-                className="stroke-white"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            <div className="flex flex-col min-w-0">
-              <span className="text-xs sm:text-base font-extrabold tracking-tight sm:tracking-wider text-white font-mono truncate">
-                VPN ALISHOP
-              </span>
-              <span className="hidden sm:block text-[10px] text-slate-400 font-medium">
-                منصة إدارة اشتراكات شام كاش والبروكسي و VPN
-              </span>
-            </div>
-          </a>
+              <svg
+                className="w-8 h-8 sm:w-9 sm:h-9 shrink-0"
+                viewBox="0 0 40 40"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                aria-hidden="true"
+              >
+                <rect
+                  x="1"
+                  y="1"
+                  width="38"
+                  height="38"
+                  rx="10"
+                  className="fill-emerald-950 stroke-emerald-500/60"
+                  strokeWidth="1.5"
+                />
+                <path
+                  d="M20 7L30 11.5V19.5C30 26.2 25.7 31.8 20 33.5C14.3 31.8 10 26.2 10 19.5V11.5L20 7Z"
+                  className="fill-emerald-500/20 stroke-emerald-400"
+                  strokeWidth="1.8"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M16.5 23L20 14L23.5 23M17.8 20.5H22.2"
+                  className="stroke-white"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <div className="flex flex-col min-w-0">
+                <span className="text-sm sm:text-base font-extrabold tracking-wide sm:tracking-wider text-white font-mono truncate">
+                  VPN ALISHOP
+                </span>
+                <span className="text-[10px] text-slate-400 font-medium truncate">
+                  إدارة اشتراكات شام كاش والبروكسي و VPN
+                </span>
+              </div>
+            </a>
 
-          {/* Zone 2: Unified Enterprise Utility Bar (Desktop Only) */}
+            {/* Mobile-only compact Sync button on top-left */}
+            <button
+              type="button"
+              onClick={() => fetchClients(true)}
+              disabled={refreshing}
+              className="sm:hidden h-8 px-2.5 rounded-lg bg-[#0E131F] hover:bg-slate-800/80 border border-slate-800 text-slate-300 hover:text-white transition-colors flex items-center gap-1.5 text-[11px] font-semibold shrink-0"
+              title="مزامنة وتحديث البيانات"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin text-emerald-400' : 'text-emerald-400'}`} />
+              <span>تحديث</span>
+            </button>
+          </div>
+
+          {/* Mobile-only Primary Actions Row (Symmetrical 2 Equal Full-Width Buttons) */}
+          <div className="grid grid-cols-2 gap-2 sm:hidden">
+            <button
+              type="button"
+              onClick={openAutoGenModal}
+              className="h-9 px-3 text-xs font-bold text-amber-300 hover:text-white bg-amber-950/75 hover:bg-amber-600 border border-amber-700/70 rounded-xl transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap"
+              title="التوليد التلقائي السريع للمشتركين (شام كاش / بروكسي منزلي / VPN عام V2Ray)"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span>توليد تلقائي</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={openAddModal}
+              className="h-9 px-3 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap shadow-sm shadow-emerald-950"
+            >
+              <Plus className="w-3.5 h-3.5 shrink-0" />
+              <span>مشترك جديد</span>
+            </button>
+          </div>
+
+          {/* Zone 2: Unified Enterprise Utility Bar (Desktop XL Only) */}
           <div className="hidden xl:flex items-center gap-1.5 bg-[#0C101B] border border-slate-800/90 rounded-xl p-1">
             <button
               type="button"
@@ -1425,8 +1467,8 @@ export default function App() {
             </button>
           </div>
 
-          {/* Zone 3: Primary Action Toolbar (Responsive on Mobile, Symmetrical on Desktop) */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 max-w-full">
+          {/* Zone 3: Primary Action Toolbar (Tablet & Desktop sm+) */}
+          <div className="hidden sm:flex items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={() => setExternalSourcesModalOpen(true)}
@@ -1456,28 +1498,28 @@ export default function App() {
               type="button"
               onClick={() => fetchClients(true)}
               disabled={refreshing}
-              className="xl:hidden p-1.5 sm:p-2 rounded-lg bg-[#0E131F] hover:bg-slate-800/80 border border-slate-800 text-slate-300 hover:text-white transition-colors shrink-0"
+              className="xl:hidden p-2 rounded-xl bg-[#0E131F] hover:bg-slate-800/80 border border-slate-800 text-slate-300 hover:text-white transition-colors shrink-0"
               title="مزامنة وتحديث البيانات"
             >
-              <RefreshCw className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${refreshing ? 'animate-spin text-emerald-400' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin text-emerald-400' : ''}`} />
             </button>
 
             <button
               type="button"
               onClick={openAutoGenModal}
-              className="h-8 sm:h-9 px-2.5 sm:px-3.5 text-[11px] sm:text-xs font-bold text-amber-300 hover:text-white bg-amber-950/70 hover:bg-amber-600 border border-amber-700/70 rounded-lg sm:rounded-xl transition-colors flex items-center gap-1 sm:gap-1.5 whitespace-nowrap shrink-0"
+              className="h-9 px-3.5 text-xs font-bold text-amber-300 hover:text-white bg-amber-950/70 hover:bg-amber-600 border border-amber-700/70 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
               title="التوليد التلقائي السريع للمشتركين (شام كاش / بروكسي منزلي / VPN عام V2Ray)"
             >
-              <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400 shrink-0" />
+              <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
               <span>توليد تلقائي</span>
             </button>
 
             <button
               type="button"
               onClick={openAddModal}
-              className="h-8 sm:h-9 px-2.5 sm:px-4 text-[11px] sm:text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg sm:rounded-xl transition-colors flex items-center gap-1 sm:gap-1.5 whitespace-nowrap shrink-0 shadow-sm shadow-emerald-950"
+              className="h-9 px-4 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 shadow-sm shadow-emerald-950"
             >
-              <Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <Plus className="w-4 h-4 shrink-0" />
               <span>مشترك جديد</span>
             </button>
           </div>
@@ -1485,14 +1527,14 @@ export default function App() {
       </header>
 
       {/* Main Workspace */}
-      <main className="flex-1 max-w-[1440px] w-full mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-5">
-        {/* Mobile & Tablet Quick Tools Bar (Visible below lg breakpoint) */}
-        <div className="space-y-2 lg:hidden">
-          <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
+      <main className="flex-1 max-w-[1440px] w-full mx-auto px-3 sm:px-6 py-3.5 sm:py-6 space-y-3.5 sm:space-y-5">
+        {/* Mobile & Tablet Quick Tools Card (Symmetrical 2-Column Grid, Zero Crowding) */}
+        <section className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-2.5 space-y-2 lg:hidden">
+          <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
               onClick={() => setExternalSourcesModalOpen(true)}
-              className="py-2 px-2.5 rounded-xl text-xs font-bold bg-violet-950/80 hover:bg-violet-800 border border-violet-700/70 text-violet-200 flex items-center justify-center gap-1.5 min-w-0"
+              className="h-9 px-2.5 rounded-xl text-xs font-bold bg-violet-950/80 hover:bg-violet-800 border border-violet-700/70 text-violet-200 flex items-center justify-center gap-1.5 min-w-0"
             >
               <Zap className="w-3.5 h-3.5 text-violet-400 shrink-0" />
               <span className="truncate">مصادر V2Ray</span>
@@ -1506,47 +1548,48 @@ export default function App() {
             <button
               type="button"
               onClick={() => openTrafficTracker(null)}
-              className="py-2 px-2.5 rounded-xl text-xs font-bold bg-sky-950/80 hover:bg-sky-800 border border-sky-700/70 text-sky-300 flex items-center justify-center gap-1.5 min-w-0"
+              className="h-9 px-2.5 rounded-xl text-xs font-bold bg-sky-950/80 hover:bg-sky-800 border border-sky-700/70 text-sky-300 flex items-center justify-center gap-1.5 min-w-0"
             >
               <Activity className="w-3.5 h-3.5 text-sky-400 shrink-0" />
               <span className="truncate">رادار الصرف والحظر</span>
             </button>
           </div>
 
-          <div className={`grid ${!isInstalled ? 'grid-cols-3' : 'grid-cols-2'} gap-1.5 sm:gap-2`}>
-            {!isInstalled && (
-              <button
-                type="button"
-                onClick={promptInstall}
-                className="py-2 px-2 rounded-xl text-[11px] sm:text-xs font-semibold bg-emerald-950/70 border border-emerald-700/70 text-emerald-300 flex items-center justify-center gap-1 min-w-0"
-              >
-                <Smartphone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span className="truncate">تثبيت التطبيق</span>
-              </button>
-            )}
+          <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
               onClick={handleCopyAndroidLink}
-              className="py-2 px-2 rounded-xl text-[11px] sm:text-xs font-medium bg-[#0E131F] border border-slate-800 text-slate-200 flex items-center justify-center gap-1 min-w-0"
+              className="h-9 px-2.5 rounded-xl text-xs font-medium bg-[#070A10] border border-slate-800 text-slate-200 flex items-center justify-center gap-1.5 min-w-0"
             >
               <Download className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-              <span className="truncate">{copiedAndroidApp ? 'تم نسخ أندرويد' : 'نسخ أندرويد'}</span>
+              <span className="truncate">{copiedAndroidApp ? 'تم نسخ أندرويد' : 'تطبيق أندرويد'}</span>
             </button>
             <button
               type="button"
               onClick={handleCopyIosLink}
-              className="py-2 px-2 rounded-xl text-[11px] sm:text-xs font-medium bg-[#0E131F] border border-slate-800 text-slate-200 flex items-center justify-center gap-1 min-w-0"
+              className="h-9 px-2.5 rounded-xl text-xs font-medium bg-[#070A10] border border-slate-800 text-slate-200 flex items-center justify-center gap-1.5 min-w-0"
             >
               <Smartphone className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-              <span className="truncate">{copiedIosApp ? 'تم نسخ آيفون' : 'نسخ آيفون'}</span>
+              <span className="truncate">{copiedIosApp ? 'تم نسخ آيفون' : 'تطبيق آيفون'}</span>
             </button>
           </div>
-        </div>
 
-        {/* 5 Symmetrical Enterprise KPI Cards (Includes Prominent General Remaining Traffic Balance on Mobile & Desktop) */}
-        <section className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
+          {!isInstalled && (
+            <button
+              type="button"
+              onClick={promptInstall}
+              className="w-full h-9 px-3 rounded-xl text-xs font-semibold bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-700/60 text-emerald-300 flex items-center justify-center gap-1.5 transition-colors"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span>تثبيت لوحة التحكم كتطبيق على الهاتف</span>
+            </button>
+          )}
+        </section>
+
+        {/* 5 Symmetrical Enterprise KPI Cards (Prominent General Remaining Balance on Mobile & Desktop) */}
+        <section className="grid grid-cols-2 lg:grid-cols-5 gap-2.5 sm:gap-4">
           {/* Card 1: General Remaining Traffic Balance (Full width on mobile col-span-2, 1st card on desktop) */}
-          <div className="col-span-2 lg:col-span-1 bg-gradient-to-br from-emerald-950/60 via-[#0E131F] to-[#0E131F] border border-emerald-700/60 rounded-2xl p-4 sm:p-5 flex flex-col justify-between">
+          <div className="col-span-2 lg:col-span-1 bg-gradient-to-br from-emerald-950/60 via-[#0E131F] to-[#0E131F] border border-emerald-700/60 rounded-2xl p-3.5 sm:p-5 flex flex-col justify-between">
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs text-emerald-300 font-bold flex items-center gap-1.5">
                 <HardDrive className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -1556,12 +1599,12 @@ export default function App() {
                 type="button"
                 onClick={() => syncNodeMavenUsage()}
                 title="تحديث الرصيد العام المتبقي"
-                className="p-1 rounded-lg bg-emerald-950/80 hover:bg-emerald-800/80 border border-emerald-800/70 text-emerald-300 transition-colors"
+                className="p-1.5 rounded-lg bg-emerald-950/80 hover:bg-emerald-800/80 border border-emerald-800/70 text-emerald-300 transition-colors shrink-0"
               >
                 <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />
               </button>
             </div>
-            <div className="mt-2.5 flex items-baseline justify-between gap-2">
+            <div className="mt-2 sm:mt-2.5 flex items-baseline justify-between gap-2 flex-wrap">
               <span
                 className="text-2xl sm:text-3xl font-extrabold font-mono tabular-nums text-white tracking-tight"
                 dir="ltr"
@@ -1575,59 +1618,59 @@ export default function App() {
           </div>
 
           {/* Card 2: Total Subscribers */}
-          <div className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-4 sm:p-5 flex flex-col justify-between">
-            <div className="text-xs text-slate-400 font-medium">إجمالي المشتركين</div>
-            <div className="mt-2.5 flex items-baseline justify-between">
+          <div className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-3.5 sm:p-5 flex flex-col justify-between">
+            <div className="text-[11px] sm:text-xs text-slate-400 font-medium">إجمالي المشتركين</div>
+            <div className="mt-2 sm:mt-2.5 flex items-baseline justify-between gap-1.5 flex-wrap">
               <span className="text-2xl sm:text-3xl font-bold font-mono tabular-nums text-white">
                 {stats.total}
               </span>
-              <span className="text-xs text-slate-500 font-mono tabular-nums">
+              <span className="text-[11px] sm:text-xs text-slate-500 font-mono tabular-nums">
                 مرتبط: {stats.boundDevices}
               </span>
             </div>
           </div>
 
           {/* Card 3: Active Subscriptions */}
-          <div className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-4 sm:p-5 flex flex-col justify-between">
-            <div className="text-xs text-slate-400 font-medium">الاشتراكات النشطة</div>
-            <div className="mt-2.5 flex items-baseline justify-between">
+          <div className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-3.5 sm:p-5 flex flex-col justify-between">
+            <div className="text-[11px] sm:text-xs text-slate-400 font-medium">الاشتراكات النشطة</div>
+            <div className="mt-2 sm:mt-2.5 flex items-baseline justify-between gap-1.5 flex-wrap">
               <span className="text-2xl sm:text-3xl font-bold font-mono tabular-nums text-emerald-400">
                 {stats.active}
               </span>
-              <span className="text-xs text-emerald-500/80">فعال الآن</span>
+              <span className="text-[11px] sm:text-xs text-emerald-500/80">فعال الآن</span>
             </div>
           </div>
 
           {/* Card 4: Expiring Soon */}
-          <div className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-4 sm:p-5 flex flex-col justify-between">
-            <div className="text-xs text-slate-400 font-medium">تنتهي خلال 5 أيام</div>
-            <div className="mt-2.5 flex items-baseline justify-between">
+          <div className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-3.5 sm:p-5 flex flex-col justify-between">
+            <div className="text-[11px] sm:text-xs text-slate-400 font-medium">تنتهي خلال 5 أيام</div>
+            <div className="mt-2 sm:mt-2.5 flex items-baseline justify-between gap-1.5 flex-wrap">
               <span className="text-2xl sm:text-3xl font-bold font-mono tabular-nums text-amber-400">
                 {stats.expiringSoon}
               </span>
-              <span className="text-xs text-slate-500">تجديد قريب</span>
+              <span className="text-[11px] sm:text-xs text-slate-500">تجديد قريب</span>
             </div>
           </div>
 
           {/* Card 5: Expired / Paused */}
-          <div className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-4 sm:p-5 flex flex-col justify-between">
-            <div className="text-xs text-slate-400 font-medium">منتهية / موقوفة</div>
-            <div className="mt-2.5 flex items-baseline justify-between">
+          <div className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-3.5 sm:p-5 flex flex-col justify-between">
+            <div className="text-[11px] sm:text-xs text-slate-400 font-medium">منتهية / موقوفة</div>
+            <div className="mt-2 sm:mt-2.5 flex items-baseline justify-between gap-1.5 flex-wrap">
               <span className="text-2xl sm:text-3xl font-bold font-mono tabular-nums text-rose-400">
                 {stats.expired + stats.inactive}
               </span>
-              <span className="text-xs text-slate-500">غير فعال</span>
+              <span className="text-[11px] sm:text-xs text-slate-500">غير فعال</span>
             </div>
           </div>
         </section>
 
         {/* External V2Ray Near-Exhaustion Alert Banner (shown only when a source is near limit) */}
         {nearLimitExternalSources.length > 0 && (
-          <section className="bg-amber-950/35 border border-amber-600/60 rounded-2xl px-4 py-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
-            <div className="flex items-center gap-2.5 text-xs text-amber-200">
-              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+          <section className="bg-amber-950/35 border border-amber-600/60 rounded-2xl px-3.5 sm:px-4 py-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+            <div className="flex items-start sm:items-center gap-2 text-xs text-amber-200 leading-relaxed">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5 sm:mt-0" />
               <span>
-                <strong className="text-amber-300">تنبيه قرب نفاد مصادر V2Ray الخارجية:</strong>{' '}
+                <strong className="text-amber-300">تنبيه قرب نفاد مصادر V2Ray:</strong>{' '}
                 {nearLimitExternalSources
                   .map(
                     (s) =>
@@ -1643,28 +1686,28 @@ export default function App() {
             <button
               type="button"
               onClick={() => setExternalSourcesModalOpen(true)}
-              className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold whitespace-nowrap shrink-0 transition-colors"
+              className="px-3 py-2 sm:py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold whitespace-nowrap shrink-0 transition-colors text-center"
             >
               فحص وتجديد المصادر
             </button>
           </section>
         )}
 
-        {/* Search & Filter Bar (Status + Service Mode Filters) */}
+        {/* Search & Filter Bar (Symmetrical Grid on Mobile, Inline Row on Desktop) */}
         <section className="flex flex-col gap-2.5 bg-[#0E131F] border border-slate-800/80 rounded-2xl p-3">
-          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-2.5 sm:gap-3">
             <div className="relative flex-1">
               <Search className="w-4 h-4 text-slate-500 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="بحث باسم المشترك، الدولة، المزود، المصدر الخارجي، أو عنوان البروكسي..."
-                className="w-full bg-[#070A10] border border-slate-800/90 focus:border-emerald-500 rounded-xl pr-10 pl-4 py-2 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none transition-colors"
+                placeholder="بحث بالاسم، الدولة، المزود، أو المصدر..."
+                className="w-full bg-[#070A10] border border-slate-800/90 focus:border-emerald-500 rounded-xl pr-10 pl-3.5 py-2.5 sm:py-2 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none transition-colors"
               />
             </div>
 
-            <div className="flex items-center gap-1 p-1 bg-[#070A10] border border-slate-800/90 rounded-xl overflow-x-auto">
+            <div className="flex items-center gap-1 p-1 bg-[#070A10] border border-slate-800/90 rounded-xl overflow-x-auto scrollbar-none">
               {(
                 [
                   { id: 'all', label: `الكل (${stats.total})` },
@@ -1678,7 +1721,7 @@ export default function App() {
                   key={tab.id}
                   type="button"
                   onClick={() => setStatusFilter(tab.id)}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+                  className={`px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
                     statusFilter === tab.id
                       ? 'bg-slate-800 text-white'
                       : 'text-slate-400 hover:text-slate-200'
@@ -1690,48 +1733,50 @@ export default function App() {
             </div>
           </div>
 
-          {/* Package / Service Mode Filter Row */}
-          <div className="flex items-center gap-1.5 overflow-x-auto pt-2 border-t border-slate-800/70">
-            <span className="text-[11px] font-semibold text-slate-500 shrink-0 ml-1">
+          {/* Package / Service Mode Filter Row (2x2 Clean Grid on Mobile, Flex Row on Desktop) */}
+          <div className="pt-2.5 border-t border-slate-800/70 flex flex-col sm:flex-row sm:items-center gap-2">
+            <span className="text-[11px] font-semibold text-slate-500 shrink-0">
               تصفية حسب الباقة:
             </span>
-            {(
-              [
-                {
-                  id: 'all',
-                  label: `جميع الباقات (${stats.total})`,
-                  activeClass: 'bg-slate-800 text-white border-slate-700',
-                },
-                {
-                  id: 'shamcash_sy',
-                  label: `شام كاش · سوريا (${modeCounts.shamcash_sy})`,
-                  activeClass: 'bg-emerald-950/80 text-emerald-300 border-emerald-700/70',
-                },
-                {
-                  id: 'residential_custom',
-                  label: `بروكسي منزلي مخصص (${modeCounts.residential_custom})`,
-                  activeClass: 'bg-sky-950/80 text-sky-300 border-sky-700/70',
-                },
-                {
-                  id: 'external_v2ray',
-                  label: `VPN عام V2Ray (${modeCounts.external_v2ray})`,
-                  activeClass: 'bg-violet-950/80 text-violet-300 border-violet-700/70',
-                },
-              ] as { id: ModeFilterTab; label: string; activeClass: string }[]
-            ).map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setModeFilter(tab.id)}
-                className={`px-3 py-1 text-[11px] font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
-                  modeFilter === tab.id
-                    ? tab.activeClass
-                    : 'bg-[#070A10] border-slate-800/80 text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
+            <div className="grid grid-cols-2 sm:flex sm:items-center sm:flex-wrap gap-1.5">
+              {(
+                [
+                  {
+                    id: 'all',
+                    label: `جميع الباقات (${stats.total})`,
+                    activeClass: 'bg-slate-800 text-white border-slate-700',
+                  },
+                  {
+                    id: 'shamcash_sy',
+                    label: `شام كاش · سوريا (${modeCounts.shamcash_sy})`,
+                    activeClass: 'bg-emerald-950/80 text-emerald-300 border-emerald-700/70',
+                  },
+                  {
+                    id: 'residential_custom',
+                    label: `بروكسي منزلي (${modeCounts.residential_custom})`,
+                    activeClass: 'bg-sky-950/80 text-sky-300 border-sky-700/70',
+                  },
+                  {
+                    id: 'external_v2ray',
+                    label: `VPN عام V2Ray (${modeCounts.external_v2ray})`,
+                    activeClass: 'bg-violet-950/80 text-violet-300 border-violet-700/70',
+                  },
+                ] as { id: ModeFilterTab; label: string; activeClass: string }[]
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setModeFilter(tab.id)}
+                  className={`px-2.5 sm:px-3 py-1.5 sm:py-1 text-[11px] font-semibold rounded-lg border transition-colors text-center truncate ${
+                    modeFilter === tab.id
+                      ? tab.activeClass
+                      : 'bg-[#070A10] border-slate-800/80 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
           </div>
         </section>
 
@@ -2486,63 +2531,74 @@ export default function App() {
                 return (
                   <div
                     key={client.id}
-                    className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-4 space-y-3"
+                    className="bg-[#0E131F] border border-slate-800/80 rounded-2xl p-3.5 space-y-3"
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="space-y-1.5 min-w-0">
-                        <div className="font-mono font-bold text-base text-white" dir="ltr">
+                    {/* Card Header: Row 1 (Username + Action Icons) + Row 2 (Full-Width Badge & Status) */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div
+                          className="font-mono font-bold text-base text-white truncate min-w-0"
+                          dir="ltr"
+                        >
                           {client.username}
                         </div>
-                        {/* Required Clear Package Type & Country Badge on Mobile Card */}
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenQrModal(client)}
+                            title="عرض QR"
+                            className="w-8 h-8 rounded-lg bg-[#070A10] border border-slate-800 text-slate-200 flex items-center justify-center"
+                          >
+                            <QrCode className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleActive(client)}
+                            title={client.is_active ? 'إيقاف الاشتراك' : 'تفعيل الاشتراك'}
+                            className={`w-8 h-8 rounded-lg border flex items-center justify-center ${
+                              client.is_active
+                                ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-400'
+                                : 'bg-rose-950/40 border-rose-800/60 text-rose-400'
+                            }`}
+                          >
+                            <Power className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(client)}
+                            title="تعديل"
+                            className="w-8 h-8 rounded-lg bg-[#070A10] border border-slate-800 text-slate-300 flex items-center justify-center"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeletingClient(client)}
+                            title="حذف"
+                            className="w-8 h-8 rounded-lg bg-[#070A10] border border-slate-800 text-rose-400 flex items-center justify-center"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Full-Width Package/Country Badge + Status Row (Zero Squeezing) */}
+                      <div className="flex items-center justify-between flex-wrap gap-1.5 pt-1.5 border-t border-slate-800/60">
                         {renderPackageAndCountryBadge(client)}
-                        <div className="flex items-center gap-1.5 text-xs">
+                        <div className="flex items-center gap-1.5 text-[11px] shrink-0">
                           {statusInfo.status === 'active' && (
-                            <span className="text-emerald-400 font-medium">نشط</span>
+                            <span className="text-emerald-400 font-bold">نشط</span>
                           )}
                           {statusInfo.status === 'expired' && (
-                            <span className="text-amber-400 font-medium">منتهي</span>
+                            <span className="text-amber-400 font-bold">منتهي</span>
                           )}
                           {statusInfo.status === 'inactive' && (
-                            <span className="text-rose-400 font-medium">موقوف في Happ</span>
+                            <span className="text-rose-400 font-bold">موقوف</span>
                           )}
                           <span className="text-slate-600">·</span>
                           <span className="text-slate-400">{statusInfo.daysText}</span>
                         </div>
-                      </div>
-
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenQrModal(client)}
-                          className="p-2 rounded-xl bg-[#070A10] border border-slate-800 text-slate-200"
-                        >
-                          <QrCode className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleToggleActive(client)}
-                          className={`p-2 rounded-xl border ${
-                            client.is_active
-                              ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-400'
-                              : 'bg-rose-950/40 border-rose-800/60 text-rose-400'
-                          }`}
-                        >
-                          <Power className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openEditModal(client)}
-                          className="p-2 rounded-xl bg-[#070A10] border border-slate-800 text-slate-300"
-                        >
-                          <Edit3 className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeletingClient(client)}
-                          className="p-2 rounded-xl bg-[#070A10] border border-slate-800 text-rose-400"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
                       </div>
                     </div>
 
@@ -2554,7 +2610,7 @@ export default function App() {
                         }`}
                       >
                         <div className="flex items-center justify-between text-xs gap-2">
-                          <span className="text-violet-300 font-bold flex items-center gap-1.5 truncate">
+                          <span className="text-violet-300 font-bold flex items-center gap-1.5 min-w-0">
                             <Zap className="w-3.5 h-3.5 text-violet-400 shrink-0" />
                             <span className="truncate">
                               {linkedExtSource?.name || 'رابط V2Ray خارجي مخصص'}
@@ -2566,9 +2622,9 @@ export default function App() {
                         </div>
                         {extUserinfo && extUserinfo.total_mb && extUserinfo.total_mb > 0 ? (
                           <>
-                            <div className="flex items-center justify-between text-[11px]">
+                            <div className="flex items-center justify-between text-[11px] gap-2">
                               <span className="text-slate-400">استهلاك المصدر:</span>
-                              <span className="font-mono font-bold text-slate-100" dir="ltr">
+                              <span className="font-mono font-bold text-slate-100 shrink-0" dir="ltr">
                                 {formatDataMb(extUserinfo.used_mb || 0)} /{' '}
                                 {formatDataMb(extUserinfo.total_mb)}
                               </span>
@@ -2609,10 +2665,10 @@ export default function App() {
                               Boolean(linkedExtSource) &&
                               probingExternalId === linkedExtSource?.id
                             }
-                            className="py-1.5 px-2.5 rounded-lg text-[11px] font-bold bg-violet-950/70 hover:bg-violet-600 text-violet-200 border border-violet-800/60 flex items-center justify-center gap-1.5"
+                            className="h-8 px-2 rounded-lg text-[11px] font-bold bg-violet-950/70 hover:bg-violet-600 text-violet-200 border border-violet-800/60 flex items-center justify-center gap-1.5 whitespace-nowrap"
                           >
                             <RefreshCw
-                              className={`w-3.5 h-3.5 ${
+                              className={`w-3.5 h-3.5 shrink-0 ${
                                 linkedExtSource && probingExternalId === linkedExtSource.id
                                   ? 'animate-spin'
                                   : ''
@@ -2623,9 +2679,9 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => setExternalSourcesModalOpen(true)}
-                            className="py-1.5 px-2.5 rounded-lg text-[11px] font-bold bg-[#0E131F] text-slate-300 border border-slate-800 flex items-center justify-center gap-1.5"
+                            className="h-8 px-2 rounded-lg text-[11px] font-bold bg-[#0E131F] text-slate-300 border border-slate-800 flex items-center justify-center gap-1.5 whitespace-nowrap"
                           >
-                            <Zap className="w-3.5 h-3.5 text-violet-400" />
+                            <Zap className="w-3.5 h-3.5 text-violet-400 shrink-0" />
                             <span>إدارة المصادر</span>
                           </button>
                         </div>
@@ -2636,12 +2692,14 @@ export default function App() {
                         <div className="bg-[#070A10] border border-slate-800/90 rounded-xl p-3 space-y-2">
                           {quotaMb > 0 ? (
                             <>
-                              <div className="flex items-center justify-between text-xs">
-                                <span className="text-slate-400 flex items-center gap-1.5">
-                                  <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
-                                  <span>حصة المشترك ({proxyDetails.subUser || client.username}):</span>
+                              <div className="flex items-center justify-between gap-2 text-xs">
+                                <span className="text-slate-400 flex items-center gap-1.5 min-w-0">
+                                  <HardDrive className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                  <span className="truncate">
+                                    الحصة ({proxyDetails.subUser || client.username})
+                                  </span>
                                 </span>
-                                <span className="font-mono font-bold text-slate-100" dir="ltr">
+                                <span className="font-mono font-bold text-slate-100 shrink-0" dir="ltr">
                                   {formatDataMb(usedMb)} / {formatDataMb(quotaMb)}
                                 </span>
                               </div>
@@ -2668,10 +2726,10 @@ export default function App() {
                               </div>
                             </>
                           ) : (
-                            <div className="flex items-center justify-between text-xs text-slate-400">
-                              <span className="flex items-center gap-1.5">
-                                <HardDrive className="w-3.5 h-3.5 text-sky-400" />
-                                <span>
+                            <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
+                              <span className="flex items-center gap-1.5 min-w-0">
+                                <HardDrive className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                <span className="truncate">
                                   {client.proxy_provider === 'dataimpulse'
                                     ? 'حصة DataImpulse (غير محددة)'
                                     : !nodeMavenConnected
@@ -2679,10 +2737,10 @@ export default function App() {
                                     : proxyDetails.subUser &&
                                       nodeMavenMap[proxyDetails.subUser.toLowerCase()]
                                     ? 'مفتوح (من الرصيد العام)'
-                                    : `المعرف (${proxyDetails.subUser || client.username}) غير مسجل في الخادم`}
+                                    : `المعرف (${proxyDetails.subUser || client.username}) غير مسجل`}
                                 </span>
                               </span>
-                              <span className="text-[11px] font-mono text-amber-400">
+                              <span className="text-[11px] font-mono text-amber-400 shrink-0">
                                 {client.proxy_provider === 'dataimpulse'
                                   ? '∞'
                                   : !nodeMavenConnected
@@ -2701,90 +2759,57 @@ export default function App() {
                               type="button"
                               onClick={() => handleRefillTraffic(client)}
                               disabled={refillingId === client.id}
-                              className={`py-1.5 px-2.5 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1.5 border transition-colors ${
+                              className={`h-8 px-2 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1.5 border transition-colors whitespace-nowrap ${
                                 justRefilledId === client.id
                                   ? 'bg-emerald-600 border-emerald-400 text-white'
                                   : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/60'
                               }`}
                             >
                               <RotateCcw
-                                className={`w-3.5 h-3.5 ${
+                                className={`w-3.5 h-3.5 shrink-0 ${
                                   refillingId === client.id ? 'animate-spin' : ''
                                 }`}
                               />
-                              <span>
+                              <span className="truncate">
                                 {refillingId === client.id
                                   ? 'يعيد الملء...'
                                   : justRefilledId === client.id
-                                  ? 'تم ملء الحصة ✓'
+                                  ? 'تم الملء ✓'
                                   : 'إعادة ملء الحصة'}
                               </span>
                             </button>
 
                             {clientMode === 'residential_custom' ? (
-                              <div className="py-1.5 px-2.5 rounded-lg text-[11px] font-bold bg-sky-950/40 text-sky-300 border border-sky-800/50 flex items-center justify-center gap-1.5">
-                                <Globe className="w-3.5 h-3.5 text-sky-400" />
-                                <span>تصفح مفتوح</span>
+                              <div className="h-8 px-2 rounded-lg text-[11px] font-bold bg-sky-950/40 text-sky-300 border border-sky-800/50 flex items-center justify-center gap-1.5 whitespace-nowrap">
+                                <Globe className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                <span className="truncate">تصفح مفتوح</span>
                               </div>
                             ) : (
                               <button
                                 type="button"
                                 onClick={() => openTrafficTracker(client)}
-                                className="py-1.5 px-2.5 rounded-lg text-[11px] font-bold bg-sky-950/70 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-800/60 flex items-center justify-center gap-1.5 transition-colors"
+                                className="h-8 px-2 rounded-lg text-[11px] font-bold bg-sky-950/70 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-800/60 flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
                               >
-                                <Activity className="w-3.5 h-3.5" />
-                                <span>تتبع الصرف وحظر</span>
+                                <Activity className="w-3.5 h-3.5 shrink-0" />
+                                <span className="truncate">تتبع الصرف وحظر</span>
                               </button>
                             )}
                           </div>
                         </div>
 
-                        {/* Mobile Proxy Name Display + Instant Regenerate Button */}
+                        {/* Mobile Proxy Session Card (Structured Top Label + Monospace String + 2 Equal Buttons) */}
                         <div
-                          className={`bg-[#070A10] border rounded-xl p-2.5 space-y-2 transition-colors ${
+                          className={`bg-[#070A10] border rounded-xl p-3 space-y-2 transition-colors ${
                             justRegeneratedId === client.id
                               ? 'border-emerald-500/90'
                               : 'border-slate-800/90'
                           }`}
                         >
                           <div className="flex items-center justify-between gap-2">
-                            <span className="text-[11px] font-medium text-slate-400 flex items-center gap-1.5">
-                              <Server className="w-3.5 h-3.5 text-emerald-400" />
-                              <span>معرف جلسة البروكسي:</span>
+                            <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1.5">
+                              <Server className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                              <span>معرف جلسة البروكسي ({countryInfo.flag} {countryInfo.code})</span>
                             </span>
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => handleCheckProxyIp(client)}
-                                disabled={checkingIpId === client.id || regeneratingId === client.id}
-                                className="px-2 py-1 rounded-lg text-[11px] font-semibold bg-[#0B0F19] text-sky-300 border border-slate-800"
-                              >
-                                {checkingIpId === client.id ? 'يفحص...' : 'فحص IP'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleRegenerateProxy(client)}
-                                disabled={regeneratingId === client.id}
-                                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 border transition-all ${
-                                  justRegeneratedId === client.id
-                                    ? 'bg-emerald-600 border-emerald-400 text-white'
-                                    : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/70'
-                                }`}
-                              >
-                                <RefreshCw
-                                  className={`w-3 h-3 ${
-                                    regeneratingId === client.id ? 'animate-spin' : ''
-                                  }`}
-                                />
-                                <span>
-                                  {regeneratingId === client.id
-                                    ? 'جاري التوليد...'
-                                    : justRegeneratedId === client.id
-                                    ? 'تغيرت الجلسة ✓'
-                                    : 'إعادة توليد'}
-                                </span>
-                              </button>
-                            </div>
                           </div>
                           <div
                             className="bg-[#0B0F19] border border-slate-800/90 rounded-lg px-2.5 py-1.5 font-mono text-[11px] overflow-x-auto whitespace-nowrap"
@@ -2795,14 +2820,48 @@ export default function App() {
                               justRegeneratedId === client.id
                             )}
                           </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleCheckProxyIp(client)}
+                              disabled={checkingIpId === client.id || regeneratingId === client.id}
+                              className="h-8 px-2 rounded-lg text-[11px] font-semibold bg-[#0B0F19] hover:bg-slate-800 text-sky-300 border border-slate-800 flex items-center justify-center gap-1.5 whitespace-nowrap"
+                            >
+                              <Globe className="w-3.5 h-3.5 shrink-0" />
+                              <span>{checkingIpId === client.id ? 'يفحص الـ IP...' : 'فحص IP'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRegenerateProxy(client)}
+                              disabled={regeneratingId === client.id}
+                              className={`h-8 px-2 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 border transition-all whitespace-nowrap ${
+                                justRegeneratedId === client.id
+                                  ? 'bg-emerald-600 border-emerald-400 text-white'
+                                  : 'bg-emerald-950/70 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-800/70'
+                              }`}
+                            >
+                              <RefreshCw
+                                className={`w-3 h-3 shrink-0 ${
+                                  regeneratingId === client.id ? 'animate-spin' : ''
+                                }`}
+                              />
+                              <span>
+                                {regeneratingId === client.id
+                                  ? 'جاري التوليد...'
+                                  : justRegeneratedId === client.id
+                                  ? 'تغيرت الجلسة ✓'
+                                  : 'إعادة توليد الجلسة'}
+                              </span>
+                            </button>
+                          </div>
                           {verifiedIpMap[client.id]?.ok && verifiedIpMap[client.id]?.exit_ip && (
-                            <div className="flex items-center justify-between gap-2 px-2.5 py-1 rounded-lg bg-emerald-950/40 border border-emerald-800/50 text-[11px]">
-                              <span className="text-emerald-300 font-medium">الـ IP الفعلي:</span>
-                              <span className="font-mono font-bold text-white" dir="ltr">
+                            <div className="flex flex-wrap items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-950/40 border border-emerald-800/50 text-[11px]">
+                              <span className="text-emerald-300 font-medium shrink-0">الـ IP الفعلي:</span>
+                              <span className="font-mono font-bold text-white truncate max-w-full" dir="ltr">
                                 {verifiedIpMap[client.id].exit_ip} ·{' '}
                                 <span className="text-emerald-400 font-normal">
-                                  {verifiedIpMap[client.id].city || countryInfo.code} (
-                                  {verifiedIpMap[client.id].isp || 'ISP'})
+                                  {verifiedIpMap[client.id].city || countryInfo.code}
+                                  {verifiedIpMap[client.id].isp ? ` (${verifiedIpMap[client.id].isp})` : ''}
                                 </span>
                               </span>
                             </div>
@@ -2811,10 +2870,10 @@ export default function App() {
                       </>
                     )}
 
-                    {/* Redesigned Mobile Info Grid (Expiry, Proxy/Country, Device) */}
-                    <div className="grid grid-cols-3 gap-2 text-xs">
+                    {/* Structured 2-Column Mobile Info Grid (No Cramped 3-Column Wrapping) */}
+                    <div className="grid grid-cols-2 gap-2 text-xs">
                       <div className="bg-[#070A10] border border-slate-800/80 rounded-xl p-2.5">
-                        <span className="text-slate-500 text-[11px] block">الانتهاء</span>
+                        <span className="text-slate-500 text-[10px] block">تاريخ الانتهاء</span>
                         <span
                           className="font-mono font-semibold tabular-nums text-slate-100 mt-0.5 block"
                           dir="ltr"
@@ -2823,30 +2882,15 @@ export default function App() {
                         </span>
                       </div>
                       <div className="bg-[#070A10] border border-slate-800/80 rounded-xl p-2.5">
-                        <span className="text-slate-500 text-[11px] block">
-                          {clientMode === 'external_v2ray'
-                            ? 'الدولة / المصدر'
-                            : `الخادم ${proxyDetails.subUser ? `(${proxyDetails.subUser})` : ''}`}
-                        </span>
-                        <span
-                          className="font-mono font-semibold tabular-nums text-slate-100 mt-0.5 block truncate"
-                          dir="ltr"
-                        >
-                          {clientMode === 'external_v2ray'
-                            ? `${countryInfo.flag} ${countryInfo.code}`
-                            : `${proxyDetails.cleanHost}:${client.proxy_port}`}
-                        </span>
-                      </div>
-                      <div className="bg-[#070A10] border border-slate-800/80 rounded-xl p-2.5">
-                        <span className="text-slate-500 text-[11px] block">الجهاز</span>
+                        <span className="text-slate-500 text-[10px] block">قفل الجهاز (HWID)</span>
                         {boundDevice ? (
                           <button
                             type="button"
                             onClick={() => handleResetDevice(client)}
-                            className="text-sky-400 font-semibold mt-0.5 inline-flex items-center gap-1"
+                            className="text-sky-400 font-semibold mt-0.5 inline-flex items-center gap-1 whitespace-nowrap"
                           >
-                            <span>مقفل (فك)</span>
-                            <RotateCcw className="w-3 h-3" />
+                            <span>مقفل (فك القفل)</span>
+                            <RotateCcw className="w-3 h-3 shrink-0" />
                           </button>
                         ) : (
                           <span className="text-emerald-400 font-medium mt-0.5 block">
@@ -2854,27 +2898,43 @@ export default function App() {
                           </span>
                         )}
                       </div>
+                      <div className="col-span-2 bg-[#070A10] border border-slate-800/80 rounded-xl px-2.5 py-2 flex items-center justify-between gap-2">
+                        <span className="text-slate-500 text-[10px] shrink-0">
+                          {clientMode === 'external_v2ray'
+                            ? 'الدولة / المصدر:'
+                            : `الخادم${proxyDetails.subUser ? ` (${proxyDetails.subUser})` : ''}:`}
+                        </span>
+                        <span
+                          className="font-mono font-semibold tabular-nums text-slate-200 text-[11px] truncate"
+                          dir="ltr"
+                        >
+                          {clientMode === 'external_v2ray'
+                            ? `${countryInfo.flag} ${countryInfo.nameAr} (${countryInfo.code})`
+                            : `${proxyDetails.cleanHost}:${client.proxy_port}`}
+                        </span>
+                      </div>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2 pt-1">
+                    {/* Symmetrical Bottom Action Row */}
+                    <div className="grid grid-cols-3 gap-1.5 pt-0.5">
                       <button
                         type="button"
                         onClick={() => handleCopyHappCode(client)}
-                        className="py-2 px-3 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center gap-1.5"
+                        className="h-9 px-2 rounded-xl text-[11px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center gap-1 whitespace-nowrap"
                       >
-                        {isHappCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        {isHappCopied ? <Check className="w-3.5 h-3.5 shrink-0" /> : <Copy className="w-3.5 h-3.5 shrink-0" />}
                         <span>{isHappCopied ? 'تم النسخ' : 'كود Happ'}</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={() => handleRequestCustomerMessage(client)}
-                        className="py-2 px-3 rounded-xl text-xs font-semibold bg-[#070A10] border border-slate-800 text-slate-200 flex items-center justify-center gap-1.5"
+                        className="h-9 px-2 rounded-xl text-[11px] font-semibold bg-[#070A10] border border-slate-800 text-slate-200 flex items-center justify-center gap-1 whitespace-nowrap"
                       >
                         {isMsgCopied ? (
-                          <Check className="w-3.5 h-3.5 text-sky-400" />
+                          <Check className="w-3.5 h-3.5 text-sky-400 shrink-0" />
                         ) : (
-                          <Share2 className="w-3.5 h-3.5 text-sky-400" />
+                          <Share2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
                         )}
                         <span>مشاركة</span>
                       </button>
@@ -2882,9 +2942,9 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => handleQuickExtend30Days(client)}
-                        className="py-2 px-3 rounded-xl text-xs font-semibold bg-[#070A10] border border-slate-800 text-emerald-400 flex items-center justify-center gap-1"
+                        className="h-9 px-2 rounded-xl text-[11px] font-semibold bg-[#070A10] border border-slate-800 text-emerald-400 flex items-center justify-center gap-1 whitespace-nowrap"
                       >
-                        <CalendarPlus className="w-3.5 h-3.5" />
+                        <CalendarPlus className="w-3.5 h-3.5 shrink-0" />
                         <span>+30 يوم</span>
                       </button>
                     </div>

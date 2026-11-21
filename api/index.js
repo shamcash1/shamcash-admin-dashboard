@@ -1855,12 +1855,38 @@ async function handleNodeMavenRefillTraffic(req, res) {
       proxy_password,
       proxy_host = 'gate.nodemaven.com',
       quota_mb = 50,
+      service_mode,
+      proxy_provider,
+      country_code,
+      external_source_id,
+      external_custom_url,
     } = req.body || {};
 
-    const rawUser = String(proxy_username || '').trim();
-    const subPrefix = rawUser.includes('-country-')
-      ? rawUser.split('-country-')[0].trim()
-      : rawUser || String(username || '').trim();
+    // Fetch existing row from Supabase first so we NEVER lose mode, provider, country, or country proxy string
+    let existingParsed = null;
+    if (client_id) {
+      const { data: existingRow } = await supabase
+        .from('proxy_clients')
+        .select('proxy_host')
+        .eq('id', client_id)
+        .maybeSingle();
+      if (existingRow?.proxy_host) {
+        existingParsed = parseStoredProxyHost(existingRow.proxy_host);
+      }
+    }
+
+    const reqRawUser = String(proxy_username || '').trim();
+    const storedRawUser = existingParsed?.pUser ? String(existingParsed.pUser).trim() : '';
+    const fullProxyUser =
+      reqRawUser.includes('-country-') || reqRawUser.includes('__cr.')
+        ? reqRawUser
+        : storedRawUser.includes('-country-') || storedRawUser.includes('__cr.')
+          ? storedRawUser
+          : reqRawUser || storedRawUser;
+
+    const subPrefix = fullProxyUser.includes('-country-')
+      ? fullProxyUser.split('-country-')[0].trim()
+      : fullProxyUser || String(username || '').trim();
 
     const nmMap = await fetchNodeMavenSubUsersMap();
     const nmSubUser = nmMap && subPrefix ? nmMap[subPrefix.toLowerCase()] : null;
@@ -1909,12 +1935,49 @@ async function handleNodeMavenRefillTraffic(req, res) {
 
     const officialPassword =
       putData?.payload?.proxy_password || nmSubUser.proxy_password || proxy_password;
+
+    // Resolve exact country, mode, and provider without ever resetting non-SY proxies back to Syria
+    const countryFromUsernameMatch = fullProxyUser.match(/-country-([a-zA-Z]{2})/i);
+    const effectiveCountry = (
+      String(country_code || '').trim() ||
+      (existingParsed?.country ? String(existingParsed.country).trim() : '') ||
+      (countryFromUsernameMatch ? countryFromUsernameMatch[1] : '') ||
+      'SY'
+    ).toUpperCase();
+
+    const rawEffectiveMode =
+      service_mode === 'residential_custom' ||
+      service_mode === 'external_v2ray' ||
+      service_mode === 'shamcash_sy'
+        ? service_mode
+        : existingParsed?.mode ||
+          (effectiveCountry !== 'SY' ? 'residential_custom' : 'shamcash_sy');
+    const effectiveMode =
+      rawEffectiveMode === 'shamcash_sy' && effectiveCountry !== 'SY'
+        ? 'residential_custom'
+        : rawEffectiveMode;
+
+    const effectiveProvider =
+      proxy_provider === 'dataimpulse' || proxy_provider === 'nodemaven'
+        ? proxy_provider
+        : existingParsed?.provider || 'nodemaven';
+
+    const effectiveHost = existingParsed?.host || proxy_host || 'gate.nodemaven.com';
+    const finalProxyUsername = fullProxyUser || nmSubUser.proxy_username;
+
     const packedHost = packServerProxyHost(
-      proxy_host,
-      rawUser || nmSubUser.proxy_username,
+      effectiveHost,
+      finalProxyUsername,
       officialPassword,
       targetQuotaMb,
-      0
+      0,
+      {
+        mode: effectiveMode,
+        provider: effectiveProvider,
+        country: effectiveCountry,
+        sourceId: external_source_id || existingParsed?.sourceId || '',
+        extUrl: external_custom_url || existingParsed?.extUrl || '',
+      }
     );
 
     if (client_id) {
@@ -1931,6 +1994,10 @@ async function handleNodeMavenRefillTraffic(req, res) {
     return res.json({
       success: true,
       sub_user: nmSubUser.proxy_username,
+      proxy_username: finalProxyUsername,
+      service_mode: effectiveMode,
+      proxy_provider: effectiveProvider,
+      country_code: effectiveCountry,
       quota_mb: targetQuotaMb,
       used_mb: 0,
       packed_host: packedHost,

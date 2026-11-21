@@ -585,7 +585,7 @@ export const AutoGenerateModal: React.FC<AutoGenerateModalProps> = ({
 
           {/* 0. Service Mode Selector (3 Packages) */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <label className="text-xs font-bold text-slate-300">
                 اختر وضع التوليد التلقائي (نوع الباقة):
               </label>
@@ -703,7 +703,7 @@ export const AutoGenerateModal: React.FC<AutoGenerateModalProps> = ({
                 </span>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                 <input
                   type="text"
                   value={nmProxyPrefix}
@@ -712,22 +712,24 @@ export const AutoGenerateModal: React.FC<AutoGenerateModalProps> = ({
                   dir="ltr"
                   className="flex-1 bg-[#0E131F] border border-slate-800 focus:border-emerald-500 rounded-xl px-3.5 py-2 text-sm font-mono font-bold text-white placeholder-slate-600 focus:outline-none transition-colors"
                 />
-                <button
-                  type="button"
-                  onClick={() => handleNmProxyPrefixChange('Ammarmedia')}
-                  className="px-2.5 py-2 rounded-xl bg-[#0E131F] hover:bg-slate-800 border border-slate-800 text-[11px] font-mono text-slate-300"
-                  dir="ltr"
-                >
-                  Ammarmedia
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleNmProxyPrefixChange('Alishop')}
-                  className="px-2.5 py-2 rounded-xl bg-[#0E131F] hover:bg-slate-800 border border-slate-800 text-[11px] font-mono text-emerald-300"
-                  dir="ltr"
-                >
-                  Alishop
-                </button>
+                <div className="grid grid-cols-2 sm:flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleNmProxyPrefixChange('Ammarmedia')}
+                    className="px-2.5 py-2 rounded-xl bg-[#0E131F] hover:bg-slate-800 border border-slate-800 text-[11px] font-mono text-slate-300"
+                    dir="ltr"
+                  >
+                    Ammarmedia
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleNmProxyPrefixChange('Alishop')}
+                    className="px-2.5 py-2 rounded-xl bg-[#0E131F] hover:bg-slate-800 border border-slate-800 text-[11px] font-mono text-emerald-300"
+                    dir="ltr"
+                  >
+                    Alishop
+                  </button>
+                </div>
               </div>
 
               <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-xs">
@@ -846,7 +848,7 @@ export const AutoGenerateModal: React.FC<AutoGenerateModalProps> = ({
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                     <input
                       type="text"
                       value={nmProxyPrefix}
@@ -855,22 +857,24 @@ export const AutoGenerateModal: React.FC<AutoGenerateModalProps> = ({
                       dir="ltr"
                       className="flex-1 bg-[#0E131F] border border-slate-800 focus:border-sky-500 rounded-xl px-3 py-1.5 text-xs font-mono font-bold text-white focus:outline-none"
                     />
-                    <button
-                      type="button"
-                      onClick={() => handleNmProxyPrefixChange('Ammarmedia')}
-                      className="px-2 py-1.5 rounded-lg bg-[#0E131F] hover:bg-slate-800 border border-slate-800 text-[11px] font-mono text-slate-300"
-                      dir="ltr"
-                    >
-                      Ammarmedia
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleNmProxyPrefixChange('Alishop')}
-                      className="px-2 py-1.5 rounded-lg bg-[#0E131F] hover:bg-slate-800 border border-slate-800 text-[11px] font-mono text-sky-300"
-                      dir="ltr"
-                    >
-                      Alishop
-                    </button>
+                    <div className="grid grid-cols-2 sm:flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleNmProxyPrefixChange('Ammarmedia')}
+                        className="px-2 py-1.5 rounded-lg bg-[#0E131F] hover:bg-slate-800 border border-slate-800 text-[11px] font-mono text-slate-300"
+                        dir="ltr"
+                      >
+                        Ammarmedia
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleNmProxyPrefixChange('Alishop')}
+                        className="px-2 py-1.5 rounded-lg bg-[#0E131F] hover:bg-slate-800 border border-slate-800 text-[11px] font-mono text-sky-300"
+                        dir="ltr"
+                      >
+                        Alishop
+                      </button>
+                    </div>
                   </div>
 
                   <div
@@ -932,8 +936,8 @@ export const AutoGenerateModal: React.FC<AutoGenerateModalProps> = ({
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    <div className="col-span-2 sm:col-span-1">
                       <span className="block text-[10px] text-slate-400 mb-1">الخادم (Host):</span>
                       <input
                         type="text"
@@ -1208,8 +1212,8 @@ export const AutoGenerateModal: React.FC<AutoGenerateModalProps> = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-2">
-              <div className="col-span-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="sm:col-span-2">
                 <span className="block text-[11px] text-slate-400 mb-1">
                   الاسم النهائي للمشترك في لوحتك:
                 </span>

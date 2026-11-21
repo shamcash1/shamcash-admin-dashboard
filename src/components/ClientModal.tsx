@@ -392,7 +392,7 @@ export const ClientModal: React.FC<ClientModalProps> = ({
               <button
                 type="button"
                 onClick={() => handleSelectMode('shamcash_sy')}
-                className={`p-2.5 rounded-xl border text-right transition-all flex items-center sm:flex-col sm:items-start gap-2.5 sm:gap-1 ${
+                className={`p-2.5 rounded-xl border text-right transition-all flex flex-col items-start gap-1 ${
                   serviceMode === 'shamcash_sy'
                     ? 'bg-emerald-950/60 border-emerald-500/80 text-white shadow-sm shadow-emerald-950/50'
                     : 'bg-[#070A10] border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
@@ -414,7 +414,7 @@ export const ClientModal: React.FC<ClientModalProps> = ({
               <button
                 type="button"
                 onClick={() => handleSelectMode('residential_custom')}
-                className={`p-2.5 rounded-xl border text-right transition-all flex items-center sm:flex-col sm:items-start gap-2.5 sm:gap-1 ${
+                className={`p-2.5 rounded-xl border text-right transition-all flex flex-col items-start gap-1 ${
                   serviceMode === 'residential_custom'
                     ? 'bg-sky-950/60 border-sky-500/80 text-white shadow-sm shadow-sky-950/50'
                     : 'bg-[#070A10] border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
@@ -436,7 +436,7 @@ export const ClientModal: React.FC<ClientModalProps> = ({
               <button
                 type="button"
                 onClick={() => handleSelectMode('external_v2ray')}
-                className={`p-2.5 rounded-xl border text-right transition-all flex items-center sm:flex-col sm:items-start gap-2.5 sm:gap-1 ${
+                className={`p-2.5 rounded-xl border text-right transition-all flex flex-col items-start gap-1 ${
                   serviceMode === 'external_v2ray'
                     ? 'bg-violet-950/60 border-violet-500/80 text-white shadow-sm shadow-violet-950/50'
                     : 'bg-[#070A10] border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
@@ -458,8 +458,8 @@ export const ClientModal: React.FC<ClientModalProps> = ({
           </div>
 
           {/* Username & Status */}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="col-span-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="sm:col-span-2">
               <label className="block text-xs font-medium text-slate-400 mb-1.5">
                 اسم المشترك
               </label>
